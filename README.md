@@ -1,15 +1,11 @@
 # MemeMaker
 
-Multimodal image captioning project to generate meme-style captions.
+MemeMaker: ViT + GPT-2 multimodal meme caption generator.
 
-## Quickstart
+## Quick setup
 
-1. Prepare environment (see deploy/requirements.txt)
-2. Run dataset prep: `python utils/data_utils.py --prepare ...`
-3. Train: `python trainers/train_mememaker.py --config utils/configs.py`
-
-## Files
-- `data/` - dataset and annotations
-- `models/` - model code
-- `trainers/` - training scripts
-- `deploy/` - app and deployment requirements
+1. Create environment and install deps:
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r deploy/requirements.txt

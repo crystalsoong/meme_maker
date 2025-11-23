@@ -1,0 +1,14 @@
+torch>=1.12
+torchvision
+transformers>=4.20
+datasets
+accelerate
+sentencepiece
+huggingface-hub
+Pillow
+pandas
+tqdm
+gradio
+kaggle
+pycocotools
+faiss-cpu

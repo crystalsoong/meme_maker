@@ -1,11 +1,21 @@
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 .env
-.venv/
+.venv
 venv/
-*.pth
-*.ckpt
-/data/raw/
+ENV/
+.ipynb_checkpoints/
+
+# Data and models (don't push big files)
+data/raw/
 data/processed/
-*.ipynb_checkpoints
+outputs/
+*.ckpt
+*.pt
+*.pth
+
+# System
 .DS_Store
