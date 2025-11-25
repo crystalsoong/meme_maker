@@ -97,29 +97,43 @@ def download_image(url, out_path, timeout=10):
         print("Failed to download", url, "->", e)
     return None
 
-def build_coco_manifest_from_hf(output_manifest="data/processed/coco_manifest.json", split="train"):
-    """
-    Load 'coco_captions' dataset via HF datasets and save images locally (data/raw/coco_images) and create manifest.
-    """
+def build_coco_manifest_from_hf(
+    output_manifest="data/processed/coco_manifest.json",
+    split="train",
+    dataset_name="HuggingFaceM4/COCO-Captions"
+):
     from datasets import load_dataset
-    ds = load_dataset("coco_captions", split=split)
+    from pathlib import Path
+    import json
+
+    print(f"Loading COCO dataset: {dataset_name}, split: {split}")
+    ds = load_dataset(dataset_name, split=split)
+
     out = []
-    img_dir = Path("data/raw/coco_images"); img_dir.mkdir(parents=True, exist_ok=True)
+    img_dir = Path("data/raw/coco_images")
+    img_dir.mkdir(parents=True, exist_ok=True)
+
     for i, item in enumerate(ds):
-        image = item["image"]  # PIL Image
-        captions = item.get("captions") or item.get("caption") or []
-        if isinstance(captions, dict) and "text" in captions:
-            captions = [captions["text"]]
-        # unique filename
-        img_path = img_dir / f"coco_{i}.jpg"
-        image.save(img_path)
-        for c in captions:
-            out.append({"image": str(img_path), "caption": c.strip(), "tone": "<factual>"})
+        img = item["image"]       # PIL Image
+        caption = item["caption"] # string
+
+        img_path = img_dir / f"coco_{split}_{i}.jpg"
+        img.save(img_path)
+
+        out.append({
+            "image": str(img_path),
+            "caption": caption.strip(),
+            "tone": "<factual>"
+        })
+
     Path(output_manifest).parent.mkdir(parents=True, exist_ok=True)
     with open(output_manifest, "w", encoding="utf-8") as f:
-        json.dump(out, f, ensure_ascii=False, indent=2)
-    print(f"Wrote {len(out)} COCO entries to {output_manifest}")
+        json.dump(out, f, indent=2)
+
+    print(f"Wrote {len(out)} COCO entries → {output_manifest}")
     return output_manifest
+
+
 
 def merge_manifests(manifest_paths, out_manifest="data/processed/merged_manifest.json", shuffle=True):
     merged = []
