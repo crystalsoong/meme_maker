@@ -19,3 +19,7 @@ outputs/
 
 # System
 .DS_Store
+
+*.zip
+data/raw/
+
