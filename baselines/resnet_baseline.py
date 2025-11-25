@@ -2,7 +2,7 @@
 """
 Simple baseline: extract ResNet50 pooled features and train a linear classifier to predict
 a small set of caption classes. This is a minimal baseline script to show a baseline workflow.
-hi my name is alan
+hi my name is alan lu 
 """
 import torch
 import torch.nn as nn
