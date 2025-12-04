@@ -9,14 +9,6 @@ venv/
 ENV/
 .ipynb_checkpoints/
 
-# Data and models (don't push big files)
-data/raw/
-data/processed/
-outputs/
-*.ckpt
-*.pt
-*.pth
-
 # System
 .DS_Store
 

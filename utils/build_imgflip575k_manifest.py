@@ -12,7 +12,7 @@ import concurrent.futures
 Creates a full manifest + downloads images for the ImgFlip575K dataset.
 
 INPUT FOLDER (from Kaggle zip extract):
-    /home/users/al628/CS Project/meme_maker/imgflip575k/dataset/memes/
+    /home/users/cs785/meme_maker/imgflip575k/dataset/memes/
 
 OUTPUT:
     Images → data/raw/imgflip575k/images/
@@ -22,7 +22,7 @@ OUTPUT:
 # --------------------------------------------------------------------
 # CONFIG
 # --------------------------------------------------------------------
-DATASET_DIR = Path("imgflip575k/dataset/memes")   # folder containing thousands of JSON files
+DATASET_DIR = Path("imgflip575k/dataset/memes")
 OUT_IMG_DIR = Path("data/raw/imgflip575k/images")
 OUT_MANIFEST = Path("data/processed/imgflip575k_manifest.json")
 
@@ -58,6 +58,7 @@ def process_meme_json(json_path):
         text_boxes = item.get("boxes", [])
 
         if not url:
+            print("no url")
             return None
 
         # Build caption string from text boxes
@@ -106,6 +107,7 @@ def main():
         for result in tqdm(executor.map(process_meme_json, json_files), total=len(json_files)):
             if result is not None:
                 results.append(result)
+            else: print("nothing found")
 
     print(f"Successfully processed: {len(results)} memes.")
 

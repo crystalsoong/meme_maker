@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 import zipfile
 import subprocess
-from utils.data_utils import build_imgflip_manifest
+import build_imgflip575k_manifest
 
 # -----------------------------------------
 # 1. Make sure folders exist
