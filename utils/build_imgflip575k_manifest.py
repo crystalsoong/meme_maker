@@ -1,122 +1,117 @@
 #!/usr/bin/env python3
+"""
+Build ImgFlip manifest from JSON files where each JSON is a LIST of meme objects.
+
+Output:
+  - Images → data/raw/imgflip575k/images/
+  - Manifest → data/processed/imgflip575k_manifest.json
+"""
 import json
-import os
-import requests
 from pathlib import Path
-from PIL import Image
-from io import BytesIO
 from tqdm import tqdm
+import requests
+from io import BytesIO
+from PIL import Image
 import concurrent.futures
 
-"""
-Creates a full manifest + downloads images for the ImgFlip575K dataset.
-
-INPUT FOLDER (from Kaggle zip extract):
-    /home/users/cs785/meme_maker/imgflip575k/dataset/memes/
-
-OUTPUT:
-    Images → data/raw/imgflip575k/images/
-    Manifest → data/processed/imgflip575k_manifest.json
-"""
-
-# --------------------------------------------------------------------
 # CONFIG
-# --------------------------------------------------------------------
-DATASET_DIR = Path("imgflip575k/dataset/memes")
+SRC_DIR = Path("imgflip575k/dataset/memes")           # where your list-JSON files live
 OUT_IMG_DIR = Path("data/raw/imgflip575k/images")
 OUT_MANIFEST = Path("data/processed/imgflip575k_manifest.json")
-
 OUT_IMG_DIR.mkdir(parents=True, exist_ok=True)
 OUT_MANIFEST.parent.mkdir(parents=True, exist_ok=True)
 
+HEADERS = {"User-Agent": "Mozilla/5.0"}
 
-# --------------------------------------------------------------------
-# Helper: download image safely
-# --------------------------------------------------------------------
-def download_image_to_file(url, out_path):
+def download_image_to_file(url: str, out_path: Path, timeout: int = 15):
+    """Download an image from url (or handle local path) and save to out_path. Return str path or None."""
     try:
-        r = requests.get(url, timeout=10)
+        # local file path (relative or absolute)
+        if (not url.startswith("http")) and Path(url).exists():
+            try:
+                img = Image.open(url).convert("RGB")
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                img.save(out_path, format="JPEG", quality=90)
+                return str(out_path)
+            except Exception:
+                return None
+
+        # http(s) download
+        r = requests.get(url, timeout=timeout, headers=HEADERS)
         if r.status_code != 200:
             return None
-
         img = Image.open(BytesIO(r.content)).convert("RGB")
-        img.save(out_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(out_path, format="JPEG", quality=90)
         return str(out_path)
     except Exception:
         return None
 
-
-# --------------------------------------------------------------------
-# Process a single JSON meme file
-# --------------------------------------------------------------------
-def process_meme_json(json_path):
+def process_json_file(json_path: Path):
+    """
+    Each input JSON is a LIST of meme dicts.
+    Return a list of manifest entries (may be empty).
+    """
     try:
-        with open(json_path, "r") as f:
-            item = json.load(f)
+        raw = json.loads(json_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
 
-        url = item.get("url")
-        text_boxes = item.get("boxes", [])
+    if not isinstance(raw, list):
+        return []
 
+    entries = []
+    for idx, item in enumerate(raw[:50]):   # <-- only take first 50 items
+        # find url
+        url = item.get("url") or item.get("image_url") or item.get("post") or item.get("img")
         if not url:
-            print("no url")
-            return None
+            continue
 
-        # Build caption string from text boxes
-        caption = " ".join([str(t).strip() for t in text_boxes if isinstance(t, str)])
-        caption = caption.strip()
+        # caption: prefer boxes -> join, else metadata.title -> post
+        boxes = item.get("boxes") or item.get("texts") or []
+        if isinstance(boxes, list) and boxes:
+            caption = " ".join([str(b).strip() for b in boxes if isinstance(b, str)]).strip()
+        else:
+            caption = item.get("metadata", {}).get("title") or item.get("post") or item.get("title") or ""
+            caption = str(caption).strip()
 
-        # Unique filename
-        filename = json_path.stem + ".jpg"
+        if not caption:
+            continue
+
+        # create unique filename per item
+        filename = f"{json_path.stem}_{idx}.jpg"
         out_path = OUT_IMG_DIR / filename
 
-        # Skip if already downloaded
+        # skip if exists
         if out_path.exists():
-            return {
-                "image": str(out_path),
-                "caption": caption,
-                "tone": "<humor>"
-            }
+            entries.append({"image": str(out_path), "caption": caption, "tone": "<humor>"})
+            continue
 
-        # Download image
-        saved_path = download_image_to_file(url, out_path)
-        if saved_path is None:
-            return None
+        saved = download_image_to_file(str(url), out_path)
+        if saved:
+            entries.append({"image": saved, "caption": caption, "tone": "<humor>"})
+        # else skip silently for now
 
-        return {
-            "image": saved_path,
-            "caption": caption,
-            "tone": "<humor>"
-        }
+    return entries
 
-    except Exception:
-        return None
-
-
-# --------------------------------------------------------------------
-# MAIN
-# --------------------------------------------------------------------
 def main():
-    print("Scanning for meme JSON files...")
-    json_files = sorted(list(DATASET_DIR.glob("*.json")))
-    print(f"Found {len(json_files)} meme items.")
+    json_files = sorted(SRC_DIR.glob("*.json"))
+    print(f"Found {len(json_files)} JSON files under {SRC_DIR}")
 
-    results = []
+    all_entries = []
+    # thread pool for IO-bound downloads
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
+        futures = {ex.submit(process_json_file, jf): jf for jf in json_files}
+        for fut in tqdm(concurrent.futures.as_completed(futures), total=len(futures)):
+            res = fut.result()
+            if res:
+                all_entries.extend(res)
 
-    # Multi-threaded image downloading (MUCH faster)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
-        for result in tqdm(executor.map(process_meme_json, json_files), total=len(json_files)):
-            if result is not None:
-                results.append(result)
-            else: print("nothing found")
-
-    print(f"Successfully processed: {len(results)} memes.")
-
-    # Save manifest
+    print(f"Successfully processed {len(all_entries)} meme entries.")
+    # write manifest
     with open(OUT_MANIFEST, "w", encoding="utf-8") as f:
-        json.dump(results, f, indent=2, ensure_ascii=False)
-
+        json.dump(all_entries, f, ensure_ascii=False, indent=2)
     print(f"Manifest saved → {OUT_MANIFEST}")
-
 
 if __name__ == "__main__":
     main()
