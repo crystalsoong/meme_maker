@@ -9,6 +9,9 @@ venv/
 ENV/
 .ipynb_checkpoints/
 
+#meme_maker
+imgflip575k/
+
 # System
 .DS_Store
 
