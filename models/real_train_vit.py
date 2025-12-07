@@ -5,17 +5,24 @@ import json
 
 import torch
 from torch import nn
+from tqdm import tqdm
+from torch.optim.lr_scheduler import StepLR
+
 
 class TransformerBlock(nn.Module):
-    def __init__(self, d_embed, num_heads):
+    def __init__(self, d_embed, num_heads, dropout_rate = 0.1):
         super().__init__()
         # MultiheadAttention expects (seq_len, batch, embed) by default
         self.multihead_attn = nn.MultiheadAttention(d_embed, num_heads)
         self.attn_norm = nn.LayerNorm(d_embed)
+
+        self.attn_dropout = nn.Dropout(dropout_rate)
         self.ff_linear = nn.Linear(d_embed, 4 * d_embed)
         self.ff_linear2 = nn.Linear(4 * d_embed, d_embed)
         self.ff_norm = nn.LayerNorm(d_embed)
         self.relu = nn.ReLU()
+
+        self.ff_dropout = nn.Dropout(dropout_rate)
 
     def forward(self, x, attn_mask):
         """
@@ -43,12 +50,13 @@ class TransformerBlock(nn.Module):
             # Transpose to (seq_len, batch, d_embed) for MultiheadAttention
             x_t = x.transpose(0, 1)  # (seq_len, batch, d_embed)
             attn_out_t, _ = self.multihead_attn(x_t, x_t, x_t, attn_mask=attn_mask)
-            h = x_t + attn_out_t
+            h = x_t + self.attn_dropout(attn_out_t)
             h = self.attn_norm(h)  # LayerNorm over last dim (embed)
             ff = self.ff_linear(h)
             ff = self.relu(ff)
             ff = self.ff_linear2(ff)
-            h = h + ff
+            
+            h = h + self.ff_dropout(ff)
             h = self.ff_norm(h)
             return h.transpose(0, 1)  # (batch, seq_len, d_embed)
 
@@ -57,10 +65,10 @@ class TransformerBlock(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, vocab_size, d_embed=64, num_heads=4, max_length=64, n_blocks=4):
+    def __init__(self, vocab_size, d_embed=128, num_heads=4, max_length=512, n_blocks=4):
         super().__init__()
         self.embed = nn.Embedding(vocab_size, d_embed)
-        self.pos_embed = nn.Embedding(max_length, d_embed)
+        self.pos_embed = nn.Embedding(max_length + 1, d_embed)
         self.blocks = nn.ModuleList([TransformerBlock(d_embed, num_heads) for _ in range(n_blocks)])
         self.unembed = nn.Linear(d_embed, vocab_size)
 
@@ -260,7 +268,12 @@ class ImageCaptionDataset(Dataset):
 
         # Tokenize caption
         encoded_caption = self.tokenizer.encode(caption)
-        # Add <sos> and <eos> tokens for the decoder
+
+        # Truncate long captions
+        MAX_LEN = 256
+        encoded_caption = encoded_caption[:MAX_LEN]
+
+        # Add <sos> and <eos> tokens
         input_seq = [self.tokenizer.word_to_index['<sos>']] + encoded_caption
         target_seq = encoded_caption + [self.tokenizer.word_to_index['<eos>']]
 
@@ -269,6 +282,27 @@ class ImageCaptionDataset(Dataset):
 
         return image, input_tensor, target_tensor
 
+from torch.nn.utils.rnn import pad_sequence
+import torch
+
+def collate_fn(batch):
+    images = [item[0].unsqueeze(0) for item in batch]
+    input_tensors = [item[1] for item in batch]
+    target_tensors = [item[2] for item in batch]
+    padding_idx = tokenizer.word_to_index['<unk>']
+    input_tensors_padded = pad_sequence(
+        input_tensors,
+        batch_first = True,
+        padding_value = padding_idx
+    )
+    target_tensors_padded = pad_sequence(
+        target_tensors,
+        batch_first = True,
+        padding_value = padding_idx
+    )
+
+    images_batch = torch.cat(images, dim = 0)
+    return images_batch, input_tensors_padded, target_tensors_padded
 # Create the dataset
 full_dataset = ImageCaptionDataset(
     image_filenames=image_filenames,
@@ -283,9 +317,10 @@ test_size = len(full_dataset) - train_size
 train_dataset, test_dataset = random_split(full_dataset, [train_size, test_size])
 
 # Create DataLoaders
-batch_size = 1 # For unbatched Transformer input, we'll iterate one by one
-train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+batch_size = 32 # For unbatched Transformer input, we'll iterate one by one
+
+train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn = collate_fn)
+test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, collate_fn = collate_fn)
 
 print(f"Total dataset size: {len(full_dataset)}")
 print(f"Train dataset size: {len(train_dataset)}")
@@ -296,9 +331,9 @@ example_image, example_input_caption, example_target_caption = next(iter(train_d
 print("\nExample from train_dataloader:")
 print(f"Image tensor shape: {example_image.shape}")
 print(f"Input caption tensor: {example_input_caption}")
-print(f"Decoded input caption: {tokenizer.decode(example_input_caption.squeeze(0).tolist())}")
+print(f"Decoded input caption: {tokenizer.decode(example_input_caption[0].tolist())}")
 print(f"Target caption tensor: {example_target_caption}")
-print(f"Decoded target caption: {tokenizer.decode(example_target_caption.squeeze(0).tolist())}")
+print(f"Decoded target caption: {tokenizer.decode(example_target_caption[0].tolist())}")
 
 
 import torch
@@ -307,7 +342,7 @@ from torch import nn
 # Assuming TransformerBlock is already defined (from cell Sd_l_IarCz03)
 
 class TransformerDecoder(nn.Module):
-    def __init__(self, vocab_size, d_embed=64, num_heads=4, max_length=64, n_blocks=4):
+    def __init__(self, vocab_size, d_embed=128, num_heads=4, max_length=512, n_blocks=4):
         super().__init__()
         self.d_embed = d_embed
         self.max_length = max_length
@@ -350,6 +385,14 @@ class TransformerDecoder(nn.Module):
 
         # Positional embeddings -> (effective_seq_len, d_embed) -> unsqueeze to (1, effective_seq_len, d_embed)
         pos_idx = torch.arange(effective_seq_len, device=device)
+        if effective_seq_len > self.pos_embed.num_embeddings:
+            print("⚠️ ERROR: seq_len too large:",
+                effective_seq_len,
+                "max allowed:", self.pos_embed.num_embeddings,
+                "caption length:", seq_len_text)
+            print("Caption tokens:", x[0].tolist())
+            raise ValueError("Caption too long for positional embeddings")
+
         pos_emb = self.pos_embed(pos_idx).unsqueeze(0)
 
         h = combined + pos_emb  # broadcasting -> (batch, effective_seq_len, d_embed)
@@ -382,7 +425,7 @@ import torch
 from torch import nn
 
 class ImageCaptioningModel(nn.Module):
-    def __init__(self, vocab_size, d_embed=64, num_heads=4, n_blocks=4, max_length=64,
+    def __init__(self, vocab_size, d_embed=128, num_heads=4, n_blocks=4, max_length=512,
                  img_size=224, patch_size=16, in_channels=3):
         super().__init__()
         self.vision_encoder = VisionEncoder(
@@ -411,15 +454,17 @@ from tqdm import tqdm
 
 # Hyperparameters (adjust as needed)
 vocab_size = len(tokenizer.vocab)
-d_embed = 64
+d_embed = 128
 num_heads = 4
 n_blocks = 4
-max_length = 64 # Max sequence length for positional encoding
+max_length = 512 # Max sequence length for positional encoding
 img_size = 224
 patch_size = 16
 in_channels = 3
 learning_rate = 0.001
-num_epochs = 10
+num_epochs = 5
+
+
 
 # Initialize the model
 model = ImageCaptioningModel(
@@ -427,14 +472,108 @@ model = ImageCaptioningModel(
     max_length=max_length, img_size=img_size, patch_size=patch_size, in_channels=in_channels
 )
 
-# Check for GPU and move model to device
+# -----------------------
+# LOAD EXISTING MODEL?
+# -----------------------
+
+model = ImageCaptioningModel(
+    vocab_size=vocab_size, d_embed=d_embed, num_heads=num_heads, n_blocks=n_blocks,
+    max_length=max_length, img_size=img_size, patch_size=patch_size, in_channels=in_channels
+)
+
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Training on device: {device}")
+
 model.to(device)
+
+
+
+
+
+
+
+
+LOAD_EXISTING_MODEL = True   # Change to False if you want to retrain
+if LOAD_EXISTING_MODEL:
+    try:
+        # Load the saved state dict
+        state_dict = torch.load("models/meme_caption_vit.pt", map_location=device)
+
+        # Check if the keys have the 'module.' prefix (indicating it was saved via DataParallel)
+        is_dataparallel_saved = any(k.startswith('module.') for k in state_dict.keys())
+        
+        # If the model is currently NOT wrapped in DataParallel but the weights ARE
+        if is_dataparallel_saved:
+            # Create a new state dict without the 'module.' prefix
+            new_state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
+            model.load_state_dict(new_state_dict)
+        else:
+            # Load standard state dict
+            model.load_state_dict(state_dict)
+            
+        print("Loaded existing model weights!")
+    except FileNotFoundError:
+        print("No saved model found — training from scratch.")
+else:
+    print("Training from scratch.")
+
+
+
+
 
 # Define Loss Function and Optimizer
 criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.word_to_index['<unk>'])
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
+scheduler = StepLR(optimizer, step_size=3, gamma=0.1)
+
+
+# Assuming tokenizer and criterion (CrossEntropyLoss) are defined globally or passed
+def evaluate_model(model, dataloader, criterion, device, split_name="Test"):
+    model.eval() # 1. Set model to evaluation mode (disables dropout, etc.)
+    total_loss = 0
+    total_correct = 0
+    total_predictions = 0
+
+    # 2. Disable gradient tracking
+    with torch.no_grad():
+        for images, input_captions, target_captions in dataloader:
+            images = images.to(device)
+            input_captions = input_captions.to(device)
+            target_captions = target_captions.to(device)
+
+            # Forward pass
+            logits = model(images, input_captions)  # (batch, seq_len, vocab_size)
+
+            # Calculate Loss
+            loss = criterion(logits.permute(0, 2, 1), target_captions)
+            # Use images.size(0) as batch size for accurate total loss calculation across batches
+            total_loss += loss.item() * images.size(0) 
+
+            # Calculate Accuracy
+            preds = logits.argmax(dim=-1)  # (batch, seq_len)
+            
+            # Mask out padding/ignored tokens for correct accuracy calculation
+            # Uses the same index as the criterion's ignore_index
+            padding_idx = tokenizer.word_to_index['<unk>']
+            mask = (target_captions != padding_idx)
+            
+            batch_correct = (preds == target_captions)[mask].sum().item()
+            batch_total = mask.sum().item()
+            
+            total_correct += batch_correct
+            total_predictions += batch_total
+            
+    avg_loss = total_loss / len(dataloader.dataset) 
+    accuracy = total_correct / total_predictions if total_predictions > 0 else 0
+
+    print(f"  > {split_name} Loss: {avg_loss:.4f}, {split_name} Accuracy: {accuracy:.4f}")
+    
+    # 3. Set model back to training mode
+    model.train() 
+    
+    return avg_loss, accuracy
 # Training Loop
 print("Starting Training...")
 for epoch in range(num_epochs):
@@ -465,17 +604,37 @@ for epoch in range(num_epochs):
         preds = logits.argmax(dim=-1)  # (batch, seq_len)
         batch_correct = (preds == target_captions).sum().item()
         batch_total = target_captions.numel()
-
+        
+        total_correct += batch_correct
+        total_predictions += batch_total
+        total_loss += loss.item()
 
     avg_train_loss = total_loss / len(train_dataloader)
     train_accuracy = total_correct / total_predictions
 
     print(f"Epoch {epoch+1} - Average Train Loss: {avg_train_loss:.4f}, Train Accuracy: {train_accuracy:.4f}")
+    scheduler.step()
+
+    evaluate_model(model, test_dataloader, criterion, device, split_name="Test")
 
     # Optional: Add evaluation on test_dataloader here
     # model.eval()
     # with torch.no_grad():
     #     # ... evaluation logic ...
+# -----------------------
+# SAVE MODEL CHECKPOINT
+# -----------------------
+save_path = "models/meme_caption_vit.pt"
+
+# Check if the model is wrapped in nn.DataParallel
+if isinstance(model, torch.nn.DataParallel):
+    # If yes, save the state_dict of the underlying model (.module)
+    torch.save(model.module.state_dict(), save_path)
+else:
+    # If no, save the standard state_dict
+    torch.save(model.state_dict(), save_path)
+
+print(f"Model saved to: {save_path}")
 
 print("Training Complete.")
 
