@@ -2,12 +2,36 @@ from PIL import Image
 import torch
 from torch.utils.data import Dataset, DataLoader, random_split
 import json
-
+import copy
 import torch
 from torch import nn
 from tqdm import tqdm
 from torch.optim.lr_scheduler import StepLR
 
+# Define the optimizer configurations to test
+optimizer_configs = [
+    {
+        'name': 'Adam',
+        'optimizer_class': optim.Adam,
+        'kwargs': {'lr': 0.001, 'weight_decay': 1e-5},
+        'scheduler_class': StepLR,
+        'scheduler_kwargs': {'step_size': 3, 'gamma': 0.1}
+    },
+    {
+        'name': 'AdamW',
+        'optimizer_class': optim.AdamW,
+        'kwargs': {'lr': 0.001, 'weight_decay': 1e-5},
+        'scheduler_class': StepLR,
+        'scheduler_kwargs': {'step_size': 3, 'gamma': 0.1}
+    },
+    {
+        'name': 'SGD',
+        'optimizer_class': optim.SGD,
+        'kwargs': {'lr': 0.01, 'momentum': 0.9, 'weight_decay': 1e-5}, # Higher LR is typical for SGD
+        'scheduler_class': StepLR,
+        'scheduler_kwargs': {'step_size': 3, 'gamma': 0.1}
+    },
+]
 
 class TransformerBlock(nn.Module):
     def __init__(self, d_embed, num_heads, dropout_rate = 0.1):
@@ -105,15 +129,30 @@ print("First humor label:", humor_labels[0])
 
 from torchvision import transforms
 
+from torchvision import transforms
+
+# Define image transformations with data augmentation
+image_transform_train = transforms.Compose([
+    transforms.RandomResizedCrop(224),  # Randomly crop and resize to a fixed size
+    transforms.RandomHorizontalFlip(),  # Randomly flip the image horizontally
+    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1), # Randomly change color properties
+    transforms.ToTensor(),              # Convert image to a PyTorch Tensor
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]) # Normalize with ImageNet stats
+])
+
+print("Image transformations defined with augmentation:")
+print(image_transform_train)
+
+
 # Define image transformations
-image_transform = transforms.Compose([
+image_transform_val = transforms.Compose([
     transforms.Resize((224, 224)),  # Resize images to a fixed size
     transforms.ToTensor(),          # Convert image to a PyTorch Tensor
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]) # Normalize with ImageNet stats
 ])
 
 print("Image transformations defined:")
-print(image_transform)
+print(image_transform_val)
 
 
 # Re-initialize the tokenizer with the loaded captions
@@ -247,6 +286,14 @@ class VisionEncoder(nn.Module):
 print("VisionEncoder class defined. Note: This assumes TransformerBlock is already defined.")
 
 
+from PIL import Image
+import torch
+from torch.utils.data import Dataset, DataLoader, random_split
+
+from PIL import Image
+import torch
+from torch.utils.data import Dataset, DataLoader, random_split
+
 class ImageCaptionDataset(Dataset):
     def __init__(self, image_filenames, captions, tokenizer, image_transform=None):
         self.image_filenames = image_filenames
@@ -268,12 +315,7 @@ class ImageCaptionDataset(Dataset):
 
         # Tokenize caption
         encoded_caption = self.tokenizer.encode(caption)
-
-        # Truncate long captions
-        MAX_LEN = 256
-        encoded_caption = encoded_caption[:MAX_LEN]
-
-        # Add <sos> and <eos> tokens
+        # Add <sos> and <eos> tokens for the decoder
         input_seq = [self.tokenizer.word_to_index['<sos>']] + encoded_caption
         target_seq = encoded_caption + [self.tokenizer.word_to_index['<eos>']]
 
@@ -281,6 +323,54 @@ class ImageCaptionDataset(Dataset):
         target_tensor = torch.tensor(target_seq, dtype=torch.long)
 
         return image, input_tensor, target_tensor
+
+# Create the full dataset without any specific transform yet
+full_dataset = ImageCaptionDataset(
+    image_filenames=image_filenames,
+    captions=captions,
+    tokenizer=tokenizer,
+    image_transform=None # No transform applied here yet
+)
+
+# Perform train-test split (e.g., 80% train, 20% test)
+train_size = int(0.8 * len(full_dataset))
+test_size = len(full_dataset) - train_size
+# Use random_split to get indices, then create separate datasets with different transforms
+train_indices, test_indices = random_split(full_dataset, [train_size, test_size])
+
+# Create train and test datasets, applying the appropriate transforms
+train_dataset = ImageCaptionDataset(
+    image_filenames=[full_dataset.image_filenames[i] for i in train_indices.indices],
+    captions=[full_dataset.captions[i] for i in train_indices.indices],
+    tokenizer=tokenizer,
+    image_transform=image_transform_train # Apply training transforms
+)
+
+test_dataset = ImageCaptionDataset(
+    image_filenames=[full_dataset.image_filenames[i] for i in test_indices.indices],
+    captions=[full_dataset.captions[i] for i in test_indices.indices],
+    tokenizer=tokenizer,
+    image_transform=image_transform_val # Apply validation transforms
+)
+
+# Create DataLoaders
+batch_size = 1 # For unbatched Transformer input, we'll iterate one by one
+train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+print(f"Total dataset size: {len(full_dataset)}")
+print(f"Train dataset size: {len(train_dataset)}")
+print(f"Test dataset size: {len(test_dataset)}")
+
+# Example of fetching one item from the DataLoader
+example_image, example_input_caption, example_target_caption = next(iter(train_dataloader))
+print("\nExample from train_dataloader:")
+print(f"Image tensor shape: {example_image.shape}")
+print(f"Input caption tensor: {example_input_caption}")
+print(f"Decoded input caption: {tokenizer.decode(example_input_caption.squeeze(0).tolist())}")
+print(f"Target caption tensor: {example_target_caption}")
+print(f"Decoded target caption: {tokenizer.decode(example_target_caption.squeeze(0).tolist())}")
+
 
 from torch.nn.utils.rnn import pad_sequence
 import torch
@@ -489,11 +579,6 @@ model.to(device)
 
 
 
-
-
-
-
-
 LOAD_EXISTING_MODEL = True   # Change to False if you want to retrain
 if LOAD_EXISTING_MODEL:
     try:
@@ -518,103 +603,121 @@ if LOAD_EXISTING_MODEL:
 else:
     print("Training from scratch.")
 
+# Evaluating Model
+# --- ORIGINAL/FLAWED evaluate_model ---
+# (DELETE the version in your submitted code that contains early stopping,
+# since it uses undefined variables like epoch, avg_train_loss, etc.)
 
+# --- CORRECTED evaluate_model (Ensure this is defined BEFORE run_experiment) ---
 
-
-
-# Define Loss Function and Optimizer
-criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.word_to_index['<unk>'])
-optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-
-scheduler = StepLR(optimizer, step_size=3, gamma=0.1)
-
-
-# Assuming tokenizer and criterion (CrossEntropyLoss) are defined globally or passed
 def evaluate_model(model, dataloader, criterion, device, split_name="Test"):
-    model.eval() # 1. Set model to evaluation mode (disables dropout, etc.)
+    model.eval() # Set model to evaluation mode
     total_loss = 0
     total_correct = 0
     total_predictions = 0
+    padding_idx = tokenizer.word_to_index['<unk>'] # Need tokenizer defined earlier
 
-    # 2. Disable gradient tracking
     with torch.no_grad():
         for images, input_captions, target_captions in dataloader:
             images = images.to(device)
             input_captions = input_captions.to(device)
             target_captions = target_captions.to(device)
 
-            # Forward pass
-            logits = model(images, input_captions)  # (batch, seq_len, vocab_size)
-
-            # Calculate Loss
+            logits = model(images, input_captions)
             loss = criterion(logits.permute(0, 2, 1), target_captions)
-            # Use images.size(0) as batch size for accurate total loss calculation across batches
-            total_loss += loss.item() * images.size(0) 
+            total_loss += loss.item() * images.size(0) # Scale by batch size
 
-            # Calculate Accuracy
-            preds = logits.argmax(dim=-1)  # (batch, seq_len)
+            preds = torch.argmax(logits, dim=-1)
             
-            # Mask out padding/ignored tokens for correct accuracy calculation
-            # Uses the same index as the criterion's ignore_index
-            padding_idx = tokenizer.word_to_index['<unk>']
+            # Mask out padding tokens for accurate count
             mask = (target_captions != padding_idx)
-            
-            batch_correct = (preds == target_captions)[mask].sum().item()
-            batch_total = mask.sum().item()
-            
-            total_correct += batch_correct
-            total_predictions += batch_total
-            
-    avg_loss = total_loss / len(dataloader.dataset) 
+            total_correct += (preds == target_captions)[mask].sum().item()
+            total_predictions += mask.sum().item()
+    
+    avg_loss = total_loss / len(dataloader.dataset)
     accuracy = total_correct / total_predictions if total_predictions > 0 else 0
 
     print(f"  > {split_name} Loss: {avg_loss:.4f}, {split_name} Accuracy: {accuracy:.4f}")
     
-    # 3. Set model back to training mode
-    model.train() 
-    
+    model.train() # Set model back to training mode
     return avg_loss, accuracy
-# Training Loop
-print("Starting Training...")
-for epoch in range(num_epochs):
-    model.train() # Set model to training mode
-    total_loss = 0
-    total_correct = 0
-    total_predictions = 0
 
-    for i, (images, input_captions, target_captions) in enumerate(tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{num_epochs}")):
-        # images: (batch, 3, H, W)
-        # input_captions: (batch, seq_len)
-        # target_captions: (batch, seq_len)
-        images = images.to(device)
-        input_captions = input_captions.to(device)
-        target_captions = target_captions.to(device)
 
-        optimizer.zero_grad()
+# Define Loss Function and Optimizer
+criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.word_to_index['<unk>']"- Starting Experiment: {config['name']} ---")
+    
+    # Reset Weights: Initialize a brand new model instance
+    model = model_class(
+        vocab_size=len(tokenizer.vocab), d_embed=128, num_heads=4, n_blocks=4,
+        max_length=512, img_size=224, patch_size=16, in_channels=3
+    ).to(device)
 
-        logits = model(images, input_captions)  # (batch, seq_len, vocab_size)
+    # Setup Optimizer and Scheduler based on config
+    optimizer = config['optimizer_class'](model.parameters(), **config['kwargs'])
+    scheduler = config['scheduler_class'](optimizer, **config['scheduler_kwargs'])
+    
+    history = {'train_loss': [], 'val_loss': [], 'val_accuracy': []}
 
-        # CrossEntropyLoss expects (N, C, S) for sequence tasks: N=batch, C=vocab_size, S=seq_len
-        loss = criterion(logits.permute(0, 2, 1), target_captions)  # -> (batch, vocab, seq_len) vs (batch, seq_len)
 
-        loss.backward()
-        optimizer.step()
 
-        # Accuracy (example)
-        preds = logits.argmax(dim=-1)  # (batch, seq_len)
-        batch_correct = (preds == target_captions).sum().item()
-        batch_total = target_captions.numel()
+    for epoch in range(num_epochs):
+        model.train()
+        total_train_loss = 0
         
-        total_correct += batch_correct
-        total_predictions += batch_total
-        total_loss += loss.item()
+        # --- (Core Training Loop - Adapted from your deleted code) ---
+        for images, input_captions, target_captions in tqdm(train_data, desc=f"Epoch {epoch+1}/{num_epochs} ({config['name']} Training)"):
+            # Move data to device (handle padding/batches correctly based on your final code)
+            images = images.to(device)
+            input_captions = input_captions.to(device)
+            target_captions = target_captions.to(device)
+            
+            optimizer.zero_grad()
+            
+            # Forward pass
+            logits = model(images, input_captions)
+            loss = criterion(logits.permute(0, 2, 1), target_captions)
+            loss.backward()
+            optimizer.step()
+            
+            total_train_loss += loss.item() * images.size(0)
 
-    avg_train_loss = total_loss / len(train_dataloader)
-    train_accuracy = total_correct / total_predictions
+        avg_train_loss = total_train_loss / len(train_data.dataset)
+        history['train_loss'].append(avg_train_loss)
+        
+        # Evaluation (using the existing evaluate_model function)
+        val_loss, val_acc = evaluate_model(model, test_data, criterion, device, split_name=config['name'])
+        history['val_loss'].append(val_loss)
+        history['val_accuracy'].append(val_acc)
+        
+        scheduler.step()
+        
+    return history
 
-    print(f"Epoch {epoch+1} - Average Train Loss: {avg_train_loss:.4f}, Train Accuracy: {train_accuracy:.4f}")
-    scheduler.step()
 
+
+# Set a seed for reproducibility before starting all experiments
+torch.manual_seed(42) 
+
+all_results = {}
+
+print("Starting Comparative Optimizer Training...")
+# Run all experiments
+for config in optimizer_configs:
+    history = run_experiment(
+        config, 
+        ImageCaptioningModel, 
+        train_dataloader, 
+        test_dataloader, 
+        criterion, 
+        device, 
+        num_epochs,
+        tokenizer
+    )
+    all_results[config['name']] = history
+
+print("\nAll experiments complete. Results stored in 'all_results'.")
+
+# Your final plotting logic to compare results will go here.    
     evaluate_model(model, test_dataloader, criterion, device, split_name="Test")
 
     # Optional: Add evaluation on test_dataloader here
@@ -624,15 +727,20 @@ for epoch in range(num_epochs):
 # -----------------------
 # SAVE MODEL CHECKPOINT
 # -----------------------
-save_path = "models/meme_caption_vit.pt"
+# --- Inside run_experiment function, near the end ---
 
-# Check if the model is wrapped in nn.DataParallel
+# Optional: Save the final model state (identified by optimizer name)
+final_save_path = f"models/caption_vit_{config['name']}.pt"
+    
+# Use the 'model' variable that was trained in this experiment instance
 if isinstance(model, torch.nn.DataParallel):
-    # If yes, save the state_dict of the underlying model (.module)
-    torch.save(model.module.state_dict(), save_path)
+    torch.save(model.module.state_dict(), final_save_path)
 else:
-    # If no, save the standard state_dict
-    torch.save(model.state_dict(), save_path)
+    torch.save(model.state_dict(), final_save_path)
+        
+print(f"Model trained with {config['name']} saved to: {final_save_path}")
+    
+return history
 
 print(f"Model saved to: {save_path}")
 
@@ -641,4 +749,35 @@ print("Training Complete.")
 # Report total number of model parameters
 total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 print(f"\nTotal number of trainable parameters: {total_params:,}")
+
+
+#Visualizing Training and Validation Curves:
+import matplotlib.pyplot as plt
+epochs_ran = len(train_losses)
+epochs_range = range(1, epochs_ran + 1)
+
+plt.figure(figsize=(12, 5))
+
+# Plot Loss
+plt.subplot(1, 2, 1) # 1 row, 2 columns, 1st plot
+plt.plot(epochs_range, train_losses, label='Training Loss')
+plt.plot(epochs_range, val_losses, label='Validation Loss')
+plt.title('Training and Validation Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+plt.grid(True)
+
+# Plot Accuracy
+plt.subplot(1, 2, 2) # 1 row, 2 columns, 2nd plot
+plt.plot(epochs_range, train_accuracies, label='Training Accuracy')
+plt.plot(epochs_range, val_accuracies, label='Validation Accuracy')
+plt.title('Training and Validation Accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
+plt.grid(True)
+
+plt.tight_layout()
+plt.show()
 
