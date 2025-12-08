@@ -15,7 +15,7 @@ import torch.nn.functional as F
 from PIL import Image
 
 # -------------- Hyper / Paths --------------
-TRAIN = False   # <-- Set True to train, False to load and run inference
+TRAIN = True   # <-- Set True to train, False to load and run inference
 MANIFEST_PATH = 'data/processed/imgflip575k_manifest.json'   # update to your dataset manifest
 CHECKPOINT_PATH = 'models/meme_caption_vit.pt'               # where to save / load model
 PLOT_DIR = 'plots'
@@ -249,6 +249,7 @@ def run_optimizer_experiment(
             logits = model(images, inps)
             loss = criterion(logits.permute(0,2,1), tgts)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm = 1.0)
             optimizer.step()
             running_loss += loss.item() * images.size(0)
             num_samples += images.size(0)
@@ -282,7 +283,7 @@ def run_optimizer_experiment(
 
 # -------------- Generation helpers --------------
 @torch.no_grad()
-def generate_greedy(model, image_tensor, tokenizer, device, max_len=30, min_len=1):
+def generate_greedy(model, image_tensor, tokenizer, device, max_len=30, min_len=1, temperature=1.0, top_p=0.9):
     model.eval()
     if image_tensor.dim() == 3:
         image_tensor = image_tensor.unsqueeze(0)
@@ -292,7 +293,33 @@ def generate_greedy(model, image_tensor, tokenizer, device, max_len=30, min_len=
     cur = torch.tensor([[sos]], device=device)
     for t in range(max_len):
         logits = model(image_tensor, cur)
-        nxt = torch.argmax(logits[:, -1, :], dim=-1).unsqueeze(0)
+        
+        # --- NEW SAMPLING LOGIC ---
+        # Get the logits for the last token and apply temperature
+        logits = logits[:, -1, :] / temperature 
+        
+        # Apply top-p (Nucleus) sampling
+        if top_p < 1.0:
+            sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+            cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+            
+            # Remove tokens with cumulative probability above the threshold
+            # Shift the indices to the right to keep tokens with cumulative prob <= top_p
+            sorted_indices_to_remove = cumulative_probs > top_p
+            
+            # Keep at least one token
+            sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+            sorted_indices_to_remove[..., 0] = 0
+
+            # Scatter back to the original indices
+            indices_to_remove = sorted_indices[sorted_indices_to_remove]
+            logits[:, indices_to_remove] = -float('Inf')
+
+        # Sample from the remaining logits
+        probs = F.softmax(logits, dim=-1)
+        nxt = torch.multinomial(probs, num_samples=1).unsqueeze(0)
+        # --- END NEW SAMPLING LOGIC ---
+
         cur = torch.cat([cur, nxt], dim=1)
         if eos is not None and nxt.item() == eos and cur.shape[1]-1 >= min_len:
             break
@@ -425,7 +452,7 @@ if __name__ == "__main__":
     required_effective = max_enc_len + 2
     max_length_for_model = required_effective - 1
 
-    d_embed = 128; num_heads = 4; n_blocks = 4; img_size=224; patch_size=16
+    d_embed = 256; num_heads = 4; n_blocks = 4; img_size=224; patch_size=16
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = ImageCaptioningModel(vocab_size=len(tokenizer.vocab),
                                  d_embed=d_embed, num_heads=num_heads, n_blocks=n_blocks,
@@ -438,7 +465,7 @@ if __name__ == "__main__":
     config = {
         'name': 'default_experiment',
         'optimizer_class': torch.optim.Adam,
-        'kwargs': {'lr': 1e-3},
+        'kwargs': {'lr': 3e-4},
         'scheduler_class': None,
         'scheduler_kwargs': {}
     }
@@ -452,7 +479,7 @@ if __name__ == "__main__":
             train_dataloader=train_loader,
             val_dataloader=val_loader,
             criterion=criterion,
-            num_epochs=5,
+            num_epochs=15,
             device=device,
             config=config,
             display=True,
@@ -487,8 +514,8 @@ if __name__ == "__main__":
                 if eos is not None and tok == eos: break
                 ref.append(tok)
             ref_text = tokenizer.decode(ref)
-            pred_greedy = generate_greedy(trained_model, img, tokenizer, device, max_len=40, min_len=2)
-            pred_beam   = generate_beam(trained_model, img, tokenizer, device, max_len=40, beam_width=3)
+            pred_greedy = generate_greedy(trained_model, img, tokenizer, device, max_len=50, min_len=2, temperature = 0.9, top_p = 0.9)
+            pred_beam   = generate_beam(trained_model, img, tokenizer, device, max_len=50, beam_width=3)
             print(f"=== Example {cnt+1} ===")
             print("Reference:", ref_text)
             print("Greedy:", pred_greedy)
