@@ -13,6 +13,8 @@ from IPython.display import clear_output
 from torchvision import transforms
 import torch.nn.functional as F
 from PIL import Image
+from collections import OrderedDict
+import numpy as np
 
 # -------------- Hyper / Paths --------------
 TRAIN = True   # <-- Set True to train, False to load and run inference
@@ -261,8 +263,7 @@ def run_optimizer_experiment(
         history['val_loss'].append(val_loss)
         history['val_accuracy'].append(val_acc)
 
-        if display:
-            plot_history(history, title=f"Experiment: {config['name']}", save_path=os.path.join(PLOT_DIR, f"{config['name']}_history.png"), live=True)
+        plot_metrics(history, title=f"Experiment: {config['name']}", save_path=os.path.join(PLOT_DIR, f"{config['name']}_history.png"), smooth=False, live=True)
 
         # Save checkpoint each epoch
         torch.save({'model_state_dict': model.state_dict(),
@@ -288,46 +289,58 @@ def generate_greedy(model, image_tensor, tokenizer, device, max_len=30, min_len=
     if image_tensor.dim() == 3:
         image_tensor = image_tensor.unsqueeze(0)
     image_tensor = image_tensor.to(device)
+
     sos = tokenizer.word_to_index['<sos>']
     eos = tokenizer.word_to_index.get('<eos>', None)
-    cur = torch.tensor([[sos]], device=device)
+
+    # cur shape: (batch=1, seq_len=1)
+    cur = torch.tensor([[sos]], device=device, dtype=torch.long)
+
     for t in range(max_len):
-        logits = model(image_tensor, cur)
-        
-        # --- NEW SAMPLING LOGIC ---
-        # Get the logits for the last token and apply temperature
-        logits = logits[:, -1, :] / temperature 
-        
-        # Apply top-p (Nucleus) sampling
+        logits = model(image_tensor, cur)           # (batch, seq_len, vocab)
+        # take last token logits
+        last_logits = logits[:, -1, :] / temperature  # (batch, vocab)
+
+        # apply top-p (nucleus) sampling if requested
         if top_p < 1.0:
-            sorted_logits, sorted_indices = torch.sort(logits, descending=True)
-            cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
-            
-            # Remove tokens with cumulative probability above the threshold
-            # Shift the indices to the right to keep tokens with cumulative prob <= top_p
+            sorted_logits, sorted_indices = torch.sort(last_logits, descending=True, dim=-1)  # (batch, vocab)
+            sorted_probs = F.softmax(sorted_logits, dim=-1)
+            cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+
+            # mask tokens with cumulative prob > top_p
             sorted_indices_to_remove = cumulative_probs > top_p
-            
-            # Keep at least one token
+            # keep at least one token
             sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
-            sorted_indices_to_remove[..., 0] = 0
+            sorted_indices_to_remove[..., 0] = False
 
-            # Scatter back to the original indices
-            indices_to_remove = sorted_indices[sorted_indices_to_remove]
-            logits[:, indices_to_remove] = -float('Inf')
+            # set to -inf in sorted_logits
+            sorted_logits = sorted_logits.masked_fill(sorted_indices_to_remove, float('-inf'))
 
-        # Sample from the remaining logits
-        probs = F.softmax(logits, dim=-1)
-        nxt = torch.multinomial(probs, num_samples=1).unsqueeze(0)
-        # --- END NEW SAMPLING LOGIC ---
+            # scatter back to original ordering
+            # create a tensor same shape as last_logits and fill using sorted_indices
+            # Note: scatter requires same dtype; we convert to float and then place back
+            filtered_logits = torch.full_like(last_logits, float('-inf'))
+            filtered_logits.scatter_(1, sorted_indices, sorted_logits)
+            last_logits = filtered_logits
 
-        cur = torch.cat([cur, nxt], dim=1)
-        if eos is not None and nxt.item() == eos and cur.shape[1]-1 >= min_len:
+        # Sample
+        probs = F.softmax(last_logits, dim=-1)       # (batch, vocab)
+        nxt = torch.multinomial(probs, num_samples=1)  # (batch, 1)
+        nxt = nxt.to(device).long()
+
+        # Append to current sequence (concatenate along seq dim)
+        cur = torch.cat([cur, nxt], dim=1)  # cur: (batch, seq_len+1)
+
+        # stop if EOS and minimum length satisfied (works for batch=1)
+        if eos is not None and nxt.numel() == 1 and nxt.item() == eos and cur.shape[1]-1 >= min_len:
             break
-    seq = cur.squeeze(0).tolist()[1:]
+
+    seq = cur.squeeze(0).tolist()[1:]  # drop the initial <sos>
     if eos is not None and eos in seq:
         seq = seq[:seq.index(eos)]
     model.train()
     return tokenizer.decode(seq)
+
 
 @torch.no_grad()
 def generate_beam(model, image_tensor, tokenizer, device, max_len=30, beam_width=3):
@@ -371,6 +384,98 @@ def first_token_stats(model, dataloader, tokenizer, device, max_batches=200):
                 cnt[p] += 1; total += 1
             if i >= max_batches: break
     return [(tokenizer.index_to_word[idx], c, c/total) for idx, c in cnt.most_common(20)]
+
+
+def smooth_list(x, window=3):
+    if window <= 1 or len(x) < window:
+        return x
+    arr = np.array(x, dtype=float)
+    # simple centered moving average (pad edges)
+    pad = window // 2
+    padded = np.pad(arr, (pad, pad), mode='edge')
+    kernel = np.ones(window) / window
+    smoothed = np.convolve(padded, kernel, mode='valid')
+    return smoothed.tolist()
+
+def plot_metrics(history, title="Training History", save_path=None, smooth=False, smooth_window=3, live=False, figsize=(10,4)):
+    """
+    Plot training/validation curves from a `history` dict.
+
+    Args:
+      history (dict): expected keys include 'train_loss', 'val_loss', 'val_accuracy' (but any numeric lists are supported).
+      title (str): figure title.
+      save_path (str|None): path to save the figure (PNG). If None, the figure is not saved.
+      smooth (bool): whether to smooth curves using a moving average.
+      smooth_window (int): smoothing window (odd recommended).
+      live (bool): if True, calls plt.pause(0.001) to enable live updating in notebooks.
+      figsize (tuple): figure size.
+    Returns:
+      str|None: path where the figure was saved, or None.
+    """
+    if not isinstance(history, dict):
+        raise ValueError("history must be a dict of lists")
+
+    # pick known keys if present, otherwise plot whatever numeric lists found
+    keys_order = ['train_loss', 'val_loss', 'train_accuracy', 'val_accuracy']
+    available = [k for k in keys_order if k in history]
+    # fallback: any numeric list keys not in keys_order
+    other_keys = [k for k in history.keys() if k not in keys_order and isinstance(history[k], (list, tuple))]
+    available += other_keys
+
+    if not available:
+        raise ValueError("No plottable keys found in history. Expected keys like 'train_loss', 'val_loss', 'val_accuracy'.")
+
+    # Prepare smoothed or raw series
+    series = OrderedDict()
+    for k in available:
+        vals = list(history[k])
+        series[k] = smooth_list(vals, window=smooth_window) if smooth else vals
+
+    # Determine number of subplots: up to 2 (loss and accuracy) grouped logically
+    loss_keys = [k for k in series.keys() if 'loss' in k]
+    acc_keys = [k for k in series.keys() if 'acc' in k or 'accuracy' in k]
+
+    n_plots = 0
+    if loss_keys: n_plots += 1
+    if acc_keys: n_plots += 1
+    if n_plots == 0:
+        # fallback: one plot with all series
+        n_plots = 1
+        loss_keys = list(series.keys())
+
+    plt.figure(figsize=figsize)
+    plot_i = 1
+
+    if loss_keys:
+        plt.subplot(1, n_plots, plot_i)
+        for k in loss_keys:
+            plt.plot(range(1, len(series[k]) + 1), series[k], label=k)
+        plt.xlabel('Epoch'); plt.ylabel('Loss'); plt.title('Loss')
+        plt.grid(True); plt.legend()
+        plot_i += 1
+
+    if acc_keys:
+        plt.subplot(1, n_plots, plot_i)
+        for k in acc_keys:
+            plt.plot(range(1, len(series[k]) + 1), series[k], label=k)
+        plt.xlabel('Epoch'); plt.ylabel('Accuracy'); plt.title('Accuracy')
+        plt.grid(True); plt.legend()
+
+    plt.suptitle(title)
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+    saved = None
+    if save_path is not None:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, bbox_inches='tight')
+        saved = save_path
+
+    if live:
+        plt.pause(0.001)
+
+    plt.show()
+    return saved
+
 
 # ============================================================
 # RUN: Dataset / model creation / train or load / generate
@@ -460,12 +565,12 @@ if __name__ == "__main__":
                                  patch_size=patch_size).to(device)
     print("Decoder pos emb size:", model.transformer_decoder.pos_embed.num_embeddings)
 
-    criterion = nn.CrossEntropyLoss(ignore_index=padding_idx)
+    criterion = nn.CrossEntropyLoss(ignore_index=padding_idx, label_smoothing=0.1)
 
     config = {
         'name': 'default_experiment',
-        'optimizer_class': torch.optim.Adam,
-        'kwargs': {'lr': 3e-4},
+        'optimizer_class': torch.optim.AdamW,
+        'kwargs': {'lr':3e-4, 'weight_decay':1e-4},
         'scheduler_class': None,
         'scheduler_kwargs': {}
     }
