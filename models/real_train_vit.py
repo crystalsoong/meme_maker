@@ -3,10 +3,13 @@ import torch
 from torch.utils.data import Dataset, DataLoader, random_split
 import json
 import copy
-import torch
+import torch.optim as optim
 from torch import nn
 from tqdm import tqdm
 from torch.optim.lr_scheduler import StepLR
+import matplotlib.pyplot as plt
+from torchvision import transforms
+from torch.nn.utils.rnn import pad_sequence
 
 # Define the optimizer configurations to test
 optimizer_configs = [
@@ -187,8 +190,113 @@ print(f"Original caption: '{captions[0]}' ")
 print(f"Encoded: {encoded_caption}")
 print(f"Decoded: '{tokenizer.decode(encoded_caption)}' ")
 
-import torch
-from torch import nn
+class ImageCaptionDataset(Dataset):
+    def __init__(self, image_filenames, captions, tokenizer, image_transform=None):
+        self.image_filenames = image_filenames
+        self.captions = captions
+        self.tokenizer = tokenizer
+        self.image_transform = image_transform
+
+    def __len__(self):
+        return len(self.captions)
+
+    def __getitem__(self, idx):
+        image_path = self.image_filenames[idx]
+        caption = self.captions[idx]
+
+        # Load image
+        image = Image.open(image_path).convert('RGB')
+        if self.image_transform:
+            image = self.image_transform(image)
+
+        # Tokenize caption
+        encoded_caption = self.tokenizer.encode(caption)
+        # Add <sos> and <eos> tokens for the decoder
+        input_seq = [self.tokenizer.word_to_index['<sos>']] + encoded_caption
+        target_seq = encoded_caption + [self.tokenizer.word_to_index['<eos>']]
+
+        input_tensor = torch.tensor(input_seq, dtype=torch.long)
+        target_tensor = torch.tensor(target_seq, dtype=torch.long)
+
+        return image, input_tensor, target_tensor
+
+def collate_fn(batch):
+    images = [item[0].unsqueeze(0) for item in batch]
+    input_tensors = [item[1] for item in batch]
+    target_tensors = [item[2] for item in batch]
+    padding_idx = tokenizer.word_to_index['<unk>']
+    
+    # Pad sequences to the length of the longest sequence in the batch
+    input_tensors_padded = pad_sequence(
+        input_tensors,
+        batch_first = True,
+        padding_value = padding_idx
+    )
+    target_tensors_padded = pad_sequence(
+        target_tensors,
+        batch_first = True,
+        padding_value = padding_idx
+    )
+
+    # Concatenate all images into a single batch tensor
+    images_batch = torch.cat(images, dim = 0)
+    return images_batch, input_tensors_padded, target_tensors_padded
+
+
+# --- 2. Create the initial full dataset (WITHOUT transform) ---
+
+full_dataset = ImageCaptionDataset(
+    image_filenames=image_filenames,
+    captions=captions,
+    tokenizer=tokenizer,
+    image_transform=None  # No transform applied here yet
+) 
+
+# --- 3. Perform the Train/Test Split on indices ---
+
+train_size = int(0.8 * len(full_dataset))
+test_size = len(full_dataset) - train_size
+# Use random_split to get indices
+train_indices, test_indices = random_split(full_dataset, [train_size, test_size])
+
+# --- 4. Create separate datasets applying the correct transforms ---
+
+train_dataset = ImageCaptionDataset(
+    image_filenames=[full_dataset.image_filenames[i] for i in train_indices.indices],
+    captions=[full_dataset.captions[i] for i in train_indices.indices],
+    tokenizer=tokenizer,
+    image_transform=image_transform_train # Apply training transforms
+)
+
+test_dataset = ImageCaptionDataset(
+    image_filenames=[full_dataset.image_filenames[i] for i in test_indices.indices],
+    captions=[full_dataset.captions[i] for i in test_indices.indices],
+    tokenizer=tokenizer,
+    image_transform=image_transform_val # Apply validation transforms
+)
+
+# --- 5. Create final DataLoaders (Batch Size 32) ---
+
+batch_size = 32
+
+train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+
+# --- 6. Print Info and Example ---
+
+print(f"Total dataset size: {len(full_dataset)}")
+print(f"Train dataset size: {len(train_dataset)}")
+print(f"Test dataset size: {len(test_dataset)}")
+
+# Example of fetching one item from the DataLoader
+example_image, example_input_caption, example_target_caption = next(iter(train_dataloader))
+print("\nExample from train_dataloader:")
+print(f"Image tensor shape: {example_image.shape}")
+print(f"Input caption tensor: {example_input_caption.shape}") # Changed printout for clarity
+print(f"Decoded input caption: {tokenizer.decode(example_input_caption[0].tolist())}")
+print(f"Target caption tensor: {example_target_caption.shape}") # Changed printout for clarity
+print(f"Decoded target caption: {tokenizer.decode(example_target_caption[0].tolist())}")
+
 
 # Assuming TransformerBlock is already defined as in previous cells
 # (Refer to cell Sd_l_IarCz03 for TransformerBlock definition if needed)
@@ -286,151 +394,6 @@ class VisionEncoder(nn.Module):
 print("VisionEncoder class defined. Note: This assumes TransformerBlock is already defined.")
 
 
-from PIL import Image
-import torch
-from torch.utils.data import Dataset, DataLoader, random_split
-
-from PIL import Image
-import torch
-from torch.utils.data import Dataset, DataLoader, random_split
-
-class ImageCaptionDataset(Dataset):
-    def __init__(self, image_filenames, captions, tokenizer, image_transform=None):
-        self.image_filenames = image_filenames
-        self.captions = captions
-        self.tokenizer = tokenizer
-        self.image_transform = image_transform
-
-    def __len__(self):
-        return len(self.captions)
-
-    def __getitem__(self, idx):
-        image_path = self.image_filenames[idx]
-        caption = self.captions[idx]
-
-        # Load image
-        image = Image.open(image_path).convert('RGB')
-        if self.image_transform:
-            image = self.image_transform(image)
-
-        # Tokenize caption
-        encoded_caption = self.tokenizer.encode(caption)
-        # Add <sos> and <eos> tokens for the decoder
-        input_seq = [self.tokenizer.word_to_index['<sos>']] + encoded_caption
-        target_seq = encoded_caption + [self.tokenizer.word_to_index['<eos>']]
-
-        input_tensor = torch.tensor(input_seq, dtype=torch.long)
-        target_tensor = torch.tensor(target_seq, dtype=torch.long)
-
-        return image, input_tensor, target_tensor
-
-# Create the full dataset without any specific transform yet
-full_dataset = ImageCaptionDataset(
-    image_filenames=image_filenames,
-    captions=captions,
-    tokenizer=tokenizer,
-    image_transform=None # No transform applied here yet
-)
-
-# Perform train-test split (e.g., 80% train, 20% test)
-train_size = int(0.8 * len(full_dataset))
-test_size = len(full_dataset) - train_size
-# Use random_split to get indices, then create separate datasets with different transforms
-train_indices, test_indices = random_split(full_dataset, [train_size, test_size])
-
-# Create train and test datasets, applying the appropriate transforms
-train_dataset = ImageCaptionDataset(
-    image_filenames=[full_dataset.image_filenames[i] for i in train_indices.indices],
-    captions=[full_dataset.captions[i] for i in train_indices.indices],
-    tokenizer=tokenizer,
-    image_transform=image_transform_train # Apply training transforms
-)
-
-test_dataset = ImageCaptionDataset(
-    image_filenames=[full_dataset.image_filenames[i] for i in test_indices.indices],
-    captions=[full_dataset.captions[i] for i in test_indices.indices],
-    tokenizer=tokenizer,
-    image_transform=image_transform_val # Apply validation transforms
-)
-
-# Create DataLoaders
-batch_size = 1 # For unbatched Transformer input, we'll iterate one by one
-train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-
-print(f"Total dataset size: {len(full_dataset)}")
-print(f"Train dataset size: {len(train_dataset)}")
-print(f"Test dataset size: {len(test_dataset)}")
-
-# Example of fetching one item from the DataLoader
-example_image, example_input_caption, example_target_caption = next(iter(train_dataloader))
-print("\nExample from train_dataloader:")
-print(f"Image tensor shape: {example_image.shape}")
-print(f"Input caption tensor: {example_input_caption}")
-print(f"Decoded input caption: {tokenizer.decode(example_input_caption.squeeze(0).tolist())}")
-print(f"Target caption tensor: {example_target_caption}")
-print(f"Decoded target caption: {tokenizer.decode(example_target_caption.squeeze(0).tolist())}")
-
-
-from torch.nn.utils.rnn import pad_sequence
-import torch
-
-def collate_fn(batch):
-    images = [item[0].unsqueeze(0) for item in batch]
-    input_tensors = [item[1] for item in batch]
-    target_tensors = [item[2] for item in batch]
-    padding_idx = tokenizer.word_to_index['<unk>']
-    input_tensors_padded = pad_sequence(
-        input_tensors,
-        batch_first = True,
-        padding_value = padding_idx
-    )
-    target_tensors_padded = pad_sequence(
-        target_tensors,
-        batch_first = True,
-        padding_value = padding_idx
-    )
-
-    images_batch = torch.cat(images, dim = 0)
-    return images_batch, input_tensors_padded, target_tensors_padded
-# Create the dataset
-full_dataset = ImageCaptionDataset(
-    image_filenames=image_filenames,
-    captions=captions,
-    tokenizer=tokenizer,
-    image_transform=image_transform
-)
-
-# Perform train-test split (e.g., 80% train, 20% test)
-train_size = int(0.8 * len(full_dataset))
-test_size = len(full_dataset) - train_size
-train_dataset, test_dataset = random_split(full_dataset, [train_size, test_size])
-
-# Create DataLoaders
-batch_size = 32 # For unbatched Transformer input, we'll iterate one by one
-
-train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn = collate_fn)
-test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, collate_fn = collate_fn)
-
-print(f"Total dataset size: {len(full_dataset)}")
-print(f"Train dataset size: {len(train_dataset)}")
-print(f"Test dataset size: {len(test_dataset)}")
-
-# Example of fetching one item from the DataLoader
-example_image, example_input_caption, example_target_caption = next(iter(train_dataloader))
-print("\nExample from train_dataloader:")
-print(f"Image tensor shape: {example_image.shape}")
-print(f"Input caption tensor: {example_input_caption}")
-print(f"Decoded input caption: {tokenizer.decode(example_input_caption[0].tolist())}")
-print(f"Target caption tensor: {example_target_caption}")
-print(f"Decoded target caption: {tokenizer.decode(example_target_caption[0].tolist())}")
-
-
-import torch
-from torch import nn
-
-# Assuming TransformerBlock is already defined (from cell Sd_l_IarCz03)
-
 class TransformerDecoder(nn.Module):
     def __init__(self, vocab_size, d_embed=128, num_heads=4, max_length=512, n_blocks=4):
         super().__init__()
@@ -504,24 +467,16 @@ print("TransformerDecoder class defined.")
 
 
 
-import torch
-
-# Instantiate the VisionEncoder
-# Using example values for d_embed, num_heads, n_blocks.
-# These should match your desired model configuration.
-# For now, we'll use d_embed=64, num_heads=4, n_blocks=4 consistent with previous examples.
-
-import torch
-from torch import nn
-
 class ImageCaptioningModel(nn.Module):
     def __init__(self, vocab_size, d_embed=128, num_heads=4, n_blocks=4, max_length=512,
                  img_size=224, patch_size=16, in_channels=3):
         super().__init__()
+        # The VisionEncoder processes the image input
         self.vision_encoder = VisionEncoder(
             d_embed=d_embed, num_heads=num_heads, n_blocks=n_blocks,
             img_size=img_size, patch_size=patch_size, in_channels=in_channels
         )
+        # The TransformerDecoder generates the caption text
         self.transformer_decoder = TransformerDecoder(
             vocab_size=vocab_size, d_embed=d_embed, num_heads=num_heads,
             max_length=max_length, n_blocks=n_blocks
@@ -537,85 +492,35 @@ class ImageCaptioningModel(nn.Module):
 
 print("ImageCaptioningModel class defined.")
 
+# Instantiate the VisionEncoder
+# Using example values for d_embed, num_heads, n_blocks.
+# These should match your desired model configuration.
+# For now, we'll use d_embed=64, num_heads=4, n_blocks=4 consistent with previous examples.
 
-import torch
-from torch import nn
-from tqdm import tqdm
-
-# Hyperparameters (adjust as needed)
 vocab_size = len(tokenizer.vocab)
 d_embed = 128
 num_heads = 4
 n_blocks = 4
-max_length = 512 # Max sequence length for positional encoding
+max_length = 512
 img_size = 224
 patch_size = 16
 in_channels = 3
-learning_rate = 0.001
-num_epochs = 5
+num_epochs = 5 # Maximum number of epochs to run (early stopping may stop earlier)
 
-
-
-# Initialize the model
-model = ImageCaptioningModel(
-    vocab_size=vocab_size, d_embed=d_embed, num_heads=num_heads, n_blocks=n_blocks,
-    max_length=max_length, img_size=img_size, patch_size=patch_size, in_channels=in_channels
-)
-
-# -----------------------
-# LOAD EXISTING MODEL?
-# -----------------------
-
-model = ImageCaptioningModel(
-    vocab_size=vocab_size, d_embed=d_embed, num_heads=num_heads, n_blocks=n_blocks,
-    max_length=max_length, img_size=img_size, patch_size=patch_size, in_channels=in_channels
-)
-
-
+# Setup device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Training on device: {device}")
 
-model.to(device)
+# Define Loss Function (Must be done once before use)
+criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.word_to_index['<unk>'])
 
-
-
-LOAD_EXISTING_MODEL = True   # Change to False if you want to retrain
-if LOAD_EXISTING_MODEL:
-    try:
-        # Load the saved state dict
-        state_dict = torch.load("models/meme_caption_vit.pt", map_location=device)
-
-        # Check if the keys have the 'module.' prefix (indicating it was saved via DataParallel)
-        is_dataparallel_saved = any(k.startswith('module.') for k in state_dict.keys())
-        
-        # If the model is currently NOT wrapped in DataParallel but the weights ARE
-        if is_dataparallel_saved:
-            # Create a new state dict without the 'module.' prefix
-            new_state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
-            model.load_state_dict(new_state_dict)
-        else:
-            # Load standard state dict
-            model.load_state_dict(state_dict)
-            
-        print("Loaded existing model weights!")
-    except FileNotFoundError:
-        print("No saved model found — training from scratch.")
-else:
-    print("Training from scratch.")
-
-# Evaluating Model
-# --- ORIGINAL/FLAWED evaluate_model ---
-# (DELETE the version in your submitted code that contains early stopping,
-# since it uses undefined variables like epoch, avg_train_loss, etc.)
-
-# --- CORRECTED evaluate_model (Ensure this is defined BEFORE run_experiment) ---
-
+# Define the CORRECT evaluate_model function 
 def evaluate_model(model, dataloader, criterion, device, split_name="Test"):
-    model.eval() # Set model to evaluation mode
+    model.eval()
     total_loss = 0
     total_correct = 0
     total_predictions = 0
-    padding_idx = tokenizer.word_to_index['<unk>'] # Need tokenizer defined earlier
+    padding_idx = tokenizer.word_to_index['<unk>']
 
     with torch.no_grad():
         for images, input_captions, target_captions in dataloader:
@@ -625,11 +530,10 @@ def evaluate_model(model, dataloader, criterion, device, split_name="Test"):
 
             logits = model(images, input_captions)
             loss = criterion(logits.permute(0, 2, 1), target_captions)
-            total_loss += loss.item() * images.size(0) # Scale by batch size
+            total_loss += loss.item() * images.size(0)
 
             preds = torch.argmax(logits, dim=-1)
             
-            # Mask out padding tokens for accurate count
             mask = (target_captions != padding_idx)
             total_correct += (preds == target_captions)[mask].sum().item()
             total_predictions += mask.sum().item()
@@ -639,69 +543,102 @@ def evaluate_model(model, dataloader, criterion, device, split_name="Test"):
 
     print(f"  > {split_name} Loss: {avg_loss:.4f}, {split_name} Accuracy: {accuracy:.4f}")
     
-    model.train() # Set model back to training mode
+    model.train()
     return avg_loss, accuracy
 
 
-# Define Loss Function and Optimizer
-criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.word_to_index['<unk>']"- Starting Experiment: {config['name']} ---")
+## 🚂 Complete run_experiment Function with Early Stopping and Saving
+
+def run_experiment(config, model_class, train_data, test_data, criterion, device, num_epochs, tokenizer):
+    print(f"\n--- Starting Experiment: {config['name']} ---")
     
-    # Reset Weights: Initialize a brand new model instance
+    # 1. Reset Weights: Initialize a brand new model instance
     model = model_class(
         vocab_size=len(tokenizer.vocab), d_embed=128, num_heads=4, n_blocks=4,
         max_length=512, img_size=224, patch_size=16, in_channels=3
     ).to(device)
 
-    # Setup Optimizer and Scheduler based on config
+    # 2. Setup Optimizer and Scheduler based on config
     optimizer = config['optimizer_class'](model.parameters(), **config['kwargs'])
     scheduler = config['scheduler_class'](optimizer, **config['scheduler_kwargs'])
     
+    # 3. History and Early Stopping Trackers
     history = {'train_loss': [], 'val_loss': [], 'val_accuracy': []}
-
-
+    
+    best_val_loss = float('inf') 
+    epochs_no_improve = 0
+    patience = 5  # Early stopping patience
+    best_model_state = None
 
     for epoch in range(num_epochs):
         model.train()
         total_train_loss = 0
         
-        # --- (Core Training Loop - Adapted from your deleted code) ---
+        # --- (Core Training Loop) ---
         for images, input_captions, target_captions in tqdm(train_data, desc=f"Epoch {epoch+1}/{num_epochs} ({config['name']} Training)"):
-            # Move data to device (handle padding/batches correctly based on your final code)
             images = images.to(device)
             input_captions = input_captions.to(device)
             target_captions = target_captions.to(device)
             
             optimizer.zero_grad()
-            
-            # Forward pass
             logits = model(images, input_captions)
             loss = criterion(logits.permute(0, 2, 1), target_captions)
             loss.backward()
             optimizer.step()
-            
             total_train_loss += loss.item() * images.size(0)
 
         avg_train_loss = total_train_loss / len(train_data.dataset)
         history['train_loss'].append(avg_train_loss)
         
-        # Evaluation (using the existing evaluate_model function)
+        # 4. Evaluation
         val_loss, val_acc = evaluate_model(model, test_data, criterion, device, split_name=config['name'])
         history['val_loss'].append(val_loss)
         history['val_accuracy'].append(val_acc)
         
+        # 5. Early Stopping Logic
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            epochs_no_improve = 0
+            # Save a deep copy of the model state dictionary when validation loss improves
+            best_model_state = copy.deepcopy(model.state_dict())
+            print(f"[{config['name']}] Validation loss improved. Saving best state.")
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= patience:
+                print(f"Early stopping triggered for {config['name']} at epoch {epoch+1}.")
+                break
+                
         scheduler.step()
         
+    # 6. Final Model Saving and Reporting
+    if best_model_state is not None:
+        model.load_state_dict(best_model_state)
+        print(f"[{config['name']}] Loaded best model state with loss: {best_val_loss:.4f}")
+    
+    final_save_path = f"models/caption_vit_best_{config['name']}.pt"
+    # Handling saving for potential DataParallel models
+    save_target = model.module.state_dict() if isinstance(model, torch.nn.DataParallel) else model.state_dict()
+    torch.save(save_target, final_save_path)
+        
+    print(f"Model trained with {config['name']} saved to: {final_save_path}")
+    
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Total trainable parameters for {config['name']} model: {total_params:,}")
+
     return history
 
 
 
+
+## 🚀 Execution and Plotting Block
+
+print("Starting Comparative Optimizer Training...")
 # Set a seed for reproducibility before starting all experiments
 torch.manual_seed(42) 
 
 all_results = {}
 
-print("Starting Comparative Optimizer Training...")
-# Run all experiments
+
 for config in optimizer_configs:
     history = run_experiment(
         config, 
@@ -717,62 +654,34 @@ for config in optimizer_configs:
 
 print("\nAll experiments complete. Results stored in 'all_results'.")
 
-# Your final plotting logic to compare results will go here.    
-    evaluate_model(model, test_dataloader, criterion, device, split_name="Test")
-
-    # Optional: Add evaluation on test_dataloader here
-    # model.eval()
-    # with torch.no_grad():
-    #     # ... evaluation logic ...
-# -----------------------
-# SAVE MODEL CHECKPOINT
-# -----------------------
-# --- Inside run_experiment function, near the end ---
-
-# Optional: Save the final model state (identified by optimizer name)
-final_save_path = f"models/caption_vit_{config['name']}.pt"
-    
-# Use the 'model' variable that was trained in this experiment instance
-if isinstance(model, torch.nn.DataParallel):
-    torch.save(model.module.state_dict(), final_save_path)
-else:
-    torch.save(model.state_dict(), final_save_path)
-        
-print(f"Model trained with {config['name']} saved to: {final_save_path}")
-    
-return history
-
-print(f"Model saved to: {save_path}")
-
-print("Training Complete.")
-
-# Report total number of model parameters
-total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-print(f"\nTotal number of trainable parameters: {total_params:,}")
 
 
-#Visualizing Training and Validation Curves:
-import matplotlib.pyplot as plt
-epochs_ran = len(train_losses)
-epochs_range = range(1, epochs_ran + 1)
 
-plt.figure(figsize=(12, 5))
+# Determine the max number of epochs run (in case one experiment early-stopped earlier)
+max_epochs = max(len(results['val_loss']) for results in all_results.values())
+epochs_range = range(1, max_epochs + 1)
 
-# Plot Loss
-plt.subplot(1, 2, 1) # 1 row, 2 columns, 1st plot
-plt.plot(epochs_range, train_losses, label='Training Loss')
-plt.plot(epochs_range, val_losses, label='Validation Loss')
-plt.title('Training and Validation Loss')
+plt.figure(figsize=(15, 6))
+
+# Plot Validation Loss Comparison
+plt.subplot(1, 2, 1)
+for name, results in all_results.items():
+    epochs_run = len(results['val_loss'])
+    # Plotting only up to the epochs run for this specific experiment
+    plt.plot(range(1, epochs_run + 1), results['val_loss'], label=name, marker='o') 
+plt.title('Validation Loss Comparison by Optimizer')
 plt.xlabel('Epoch')
 plt.ylabel('Loss')
 plt.legend()
 plt.grid(True)
 
-# Plot Accuracy
-plt.subplot(1, 2, 2) # 1 row, 2 columns, 2nd plot
-plt.plot(epochs_range, train_accuracies, label='Training Accuracy')
-plt.plot(epochs_range, val_accuracies, label='Validation Accuracy')
-plt.title('Training and Validation Accuracy')
+# Plot Validation Accuracy Comparison
+plt.subplot(1, 2, 2)
+for name, results in all_results.items():
+    epochs_run = len(results['val_accuracy'])
+    # Plotting only up to the epochs run for this specific experiment
+    plt.plot(range(1, epochs_run + 1), results['val_accuracy'], label=name, marker='o') 
+plt.title('Validation Accuracy Comparison by Optimizer')
 plt.xlabel('Epoch')
 plt.ylabel('Accuracy')
 plt.legend()
@@ -780,4 +689,3 @@ plt.grid(True)
 
 plt.tight_layout()
 plt.show()
-
