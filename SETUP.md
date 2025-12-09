@@ -22,4 +22,4 @@ Model Evaluation:
 
 Model Testing (Giving the model a meme image to generate a caption for):
 1. To give the model a meme image, import the image into the ```test_images``` folder
-2. Run ```python3 predict_image.py``` to generate a corresponding caption
+2. Run ```python3 predict_image.py test_images/***YOUR IMAGE NAME***``` to generate a corresponding caption

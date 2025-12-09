@@ -23,7 +23,7 @@ If evaluating the model:
 The Model Evaluation corresponding meme images used in the 10 example outputs given to the model for testing is found in the ```eval/image_examples``` folder
 The training and validation curve plots for each experiment are found in the ```eval/plots``` folder
 
-To test the model with your own image, import the image into the ```test_images``` folder and run ```python3 predict_image.py``` to generate a corresponding caption
+To test the model with your own image, import the image into the ```test_images``` folder and run ```python3 predict_image.py test_images/***YOUR IMAGE NAME***``` to generate a corresponding caption
 
 **Video Links**
 Project Demo: This is a 3–5-minute video that shows what your project does and why that matters. Think of this as the video you would show a non-specialist to pitch what you built. There is no reason to show any code in this video – you can use slides with visualizations or diagrams to provide motivation, show the running application, show experimental results, etc. This video should be included in your repository and linked prominently in your README file.
