@@ -58,7 +58,7 @@ We can see that both the train loss and validation loss steadily decreased, and 
 Model Final Testings:
 We tested our model with some meme images without text to see what the model would generate as captions. Though the outputs of the model don't follow traditional meme sentence structure, we still got a good laugh at the results. Here are some of our favorite examples: 
 
-![readme](eval/test_images/readme_pic.jpeg)
+![readme](eval/test_images/readme_pic.png)
 
 
 **Individual Contributions**
