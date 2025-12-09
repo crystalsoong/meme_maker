@@ -524,6 +524,30 @@ if __name__ == "__main__":
     padding_idx = tokenizer.word_to_index.get('<pad>', tokenizer.word_to_index.get('<unk>', 0))
     print("Vocab size:", len(tokenizer.vocab))
 
+# ======================================================================
+    # CRITICAL: SAVE THE EXACT TOKENIZER MAPPING
+    # This generates the file needed for the inference script to avoid mismatch.
+    # ======================================================================
+    TOKENIZER_VOCAB_PATH = 'data/processed/tokenizer_vocab.json'
+
+    # Package the mappings
+    vocab_data = {
+        'word_to_index': tokenizer.word_to_index,
+        # Convert index_to_word keys to strings for JSON serialization
+        'index_to_word': {str(i):w for i,w in tokenizer.index_to_word.items()}
+    }
+
+    # Save the file
+    os.makedirs(os.path.dirname(TOKENIZER_VOCAB_PATH), exist_ok=True)
+    with open(TOKENIZER_VOCAB_PATH, 'w') as f:
+        json.dump(vocab_data, f, indent=4)
+    print(f"Tokenizer vocabulary saved to {TOKENIZER_VOCAB_PATH}")
+    # ======================================================================
+
+
+
+
+
     # ---------- 4) Train/val/test split & Dataloaders ----------
     n = len(image_filenames)
     train_frac, val_frac, test_frac = 0.8, 0.1, 0.1
