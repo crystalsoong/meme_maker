@@ -67,12 +67,12 @@ def process_json_file(json_path: Path):
     entries = []
     
     for idx, item in enumerate(raw[:200]):
-        # 1. Find URL (Required for Visual Input)
+        # Find URL (Required for Visual Input)
         url = item.get("url") or item.get("image_url") or item.get("post") or item.get("img")
         if not url:
             continue
 
-        # 2. STRICT CAPTION FILTERING (ONLY accept ON-IMAGE text from 'boxes' or 'texts')
+        # STRICT CAPTION FILTERING (ONLY accept ON-IMAGE text from 'boxes' or 'texts')
         boxes = item.get("boxes") or item.get("texts") or []
         
         # If no 'boxes' text is found, we SKIP the entry. 
@@ -82,15 +82,15 @@ def process_json_file(json_path: Path):
             
         caption = " ".join([str(b).strip() for b in boxes if isinstance(b, str)]).strip()
 
-        # 3. MINIMUM LENGTH FILTER
+        #  MINIMUM LENGTH FILTER
         if not caption or len(caption) < MIN_CAPTION_LENGTH:
             continue
 
-        # 4. Process and Download
+
         filename = f"{json_path.stem}_{idx}.jpg"
         out_path = OUT_IMG_DIR / filename
 
-        # Skip download if image already exists
+
         if out_path.exists():
             entries.append({"image": str(out_path), "caption": caption, "tone": "<humor>"})
             continue
@@ -106,17 +106,14 @@ def main():
     print(f"Found {len(json_files)} JSON files under {SRC_DIR}")
 
     all_entries = []
-    # thread pool for IO-bound downloads
     with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
         futures = {ex.submit(process_json_file, jf): jf for jf in json_files}
-        # Use a progress bar to track files processed
         for fut in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Processing JSON files"):
             res = fut.result()
             if res:
                 all_entries.extend(res)
 
     print(f"Successfully processed {len(all_entries)} high-quality meme entries.")
-    # write manifest
     with open(OUT_MANIFEST, "w", encoding="utf-8") as f:
         json.dump(all_entries, f, ensure_ascii=False, indent=2)
     print(f"Manifest saved → {OUT_MANIFEST}")
