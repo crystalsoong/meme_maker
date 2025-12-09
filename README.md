@@ -42,8 +42,28 @@ Results from Optimizer Experiments:
 | **SGD_withMomentum**| 0.0001      | 0.0000     | ` cook ruled fake! boy* *chair* boy* cry, class!!!! cubs modify smile!! hills kinetic abnormal off! serious bethesda donut i-i`                                               | `cubs faces. exams. faces. exams. emo faces. exams. emo faces.`                 | ![img4](eval/image_examples/example_4_greedy.jpg)      |
 | **AdamW_LowLR**     | 0.0002      | 0.0000     | `instrument faces. prequels. jimmy!? rid alone. into rid history carnivores spider bots spout! screamed: emo bully: ...`   | `instrument bots rid wasted wasted wasted`                                      | ![img1](eval/image_examples/example_1_greedy.jpg)      |
 
-We can see that the models 
 
+
+
+Qualitative Results:
+We displayed our training and validation curves after each of the optimizer experiments:
+Adam_HighLR: ![lrcurve](eval/plots/Adam_HighLR_final_history.png)
+SGD_withMomentum: ![sgd](eval/plots/SGD_withMomentum_final_history.png)
+AdamW_LowLR: ![hlr](eval/plots/default_experiment_with_scheduler_history.png)
+
+We can see that both the train loss and validation loss steadily decreased, and the validation accuracy increased almost linearly for the Adam with a high learning rate and a low learning rate, and increased non-linearly for the SGD with momentum model. 
+
+
+
+Model Final Testings:
+We tested our model with some meme images without text to see what the model would generate as captions. Though the outputs of the model don't follow traditional meme sentence structure, we still got a good laugh at the results. Here are some of our favorite examples: 
+
+![mega](eval/test_images/test_megamind.jpeg)
+**test? down? test? test? test? test? test? “down? test? you good?**
+
+
+![pika](eval/test_images/test_pikachu.jpeg)
+**iwant pajama pizza morgs shocked...y'all no "irs job." anxiety: interesting "doesn't you!!!**
 
 
 **Individual Contributions**
