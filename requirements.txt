@@ -1,0 +1,10 @@
+# requirements.txt
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=0.15.0
+numpy
+matplotlib
+Pillow
+tqdm
+# Required for professional evaluation metrics (CIDEr, BLEU)
+pycocoevalcap

@@ -26,12 +26,25 @@ The training and validation curve plots for each experiment are found in the ```
 To test the model with your own image, import the image into the ```test_images``` folder and run ```python3 eval/predict_image.py test_images/***YOUR IMAGE NAME***``` to generate a corresponding caption
 
 **Video Links**
+
 [Project Demo](https://youtu.be/ebXJeOzNuqE)
 
 Technical Walkthrough: This is a 5–10-minute video that shows and discusses how your project works. Think of this as the video you would show a fellow ML engineer to explain how you accomplished what you did. This video should help orient a grader to understand how your code works and where the machine learning concepts are being applied. It should also help a grader understand what was challenging about the project and where the significant technical contributions can be found. Like the project demo, this video should be stored in your repository and clearly linked in your README file.
 
 **Evaluation**
-an Evaluation section that presents any quantitative results, accuracy metrics, or qualitative outcomes from testing,
+
+Quantitative Results/Accuracy Metrics:
+
+Results from Optimizer Experiments:
+| **Optimizer**       | **CIDEr-D** | **BLEU-4** | **Greedy Output (Example)**                                                                                              | **Beam Search Output (Example)**                                               | **Example Image** |
+|---------------------|-------------|------------|---------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------|--------------------|
+| **Adam_HighLR**     | 0.0002      | 0.0000     | `mc easly came, square "a traveling citrus brian me:never`                                                                                                                   | `revolutionary.`                                                                         | !(eval/image_examples/example_5_greedy.jpg)      |
+| **SGD_withMomentum**| 0.0001      | 0.0000     | ` cook ruled fake! boy* *chair* boy* cry, class!!!! cubs modify smile!! hills kinetic abnormal off! serious bethesda donut i-i`                                               | `cubs faces. exams. faces. exams. emo faces. exams. emo faces.`                 | !(eval/image_examples/example_4_greedy.jpg)      |
+| **AdamW_LowLR**     | 0.0002      | 0.0000     | `instrument faces. prequels. jimmy!? rid alone. into rid history carnivores spider bots spout! screamed: emo bully: ...`   | `instrument bots rid wasted wasted wasted`                                      | !(eval/image_examples/example_4_greedy.jpg)      |
+
+We can see that the models 
+
+
 
 **Individual Contributions**
 Crystal Soong and Alan Lu contributed equally to the brainstorming, development, testing, and documentation of the Meme Maker Model. The work was split evenly and both partners worked together to complete the project. 
