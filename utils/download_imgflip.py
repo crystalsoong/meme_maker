@@ -4,18 +4,11 @@ import zipfile
 import subprocess
 import build_imgflip575k_manifest
 
-# -----------------------------------------
-# 1. Make sure folders exist
-# -----------------------------------------
 raw_dir = Path("data/raw/imgflip")
 raw_dir.mkdir(parents=True, exist_ok=True)
 
-# -----------------------------------------
-# 2. Download via Kaggle CLI
-# -----------------------------------------
 print("Downloading ImgFlip575K from Kaggle…")
 
-# dataset: schesa/imgflip575k  OR  schesa/imgflip-575k
 cmd = [
     "kaggle", "datasets", "download",
     "-d", "schesa/imgflip575k",
@@ -25,9 +18,6 @@ cmd = [
 subprocess.run(cmd, check=True)
 print("Download complete.")
 
-# -----------------------------------------
-# 3. Unzip the dataset
-# -----------------------------------------
 zip_files = list(raw_dir.glob("*.zip"))
 if not zip_files:
     raise FileNotFoundError("No zip file downloaded!")
@@ -40,9 +30,6 @@ with zipfile.ZipFile(zip_path, "r") as z:
 
 print("Unzip complete.")
 
-# -----------------------------------------
-# 4. Auto detect CSV and build manifest
-# -----------------------------------------
 csvs = list(raw_dir.glob("*.csv"))
 if not csvs:
     raise FileNotFoundError("No CSV found in ImgFlip folder!")

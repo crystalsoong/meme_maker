@@ -60,14 +60,13 @@ EVALUATION_CHECKPOINT_NAME = 'Adam_HighLR'
 # ADJUST THIS LIST to match the 'name' key of your saved experiments:
 CHECKPOINTS_TO_EVALUATE = ['Adam_HighLR', 'SGD_withMomentum', 'AdamW_LowLR']
 # -------------- Hyper / Paths --------------
-TRAIN = False   # <-- Set True to train, False to load and run inference
+TRAIN = False   # Set True to train, False to load and run inference
 MANIFEST_PATH = 'data/processed/imgflip575k_manifest.json'
 CHECKPOINT_PATH = 'models/meme_caption_vit.pt'
 EXAMPLE_OUTPUT_DIR = 'eval/image_examples'
 PLOT_DIR = 'eval/plots'
 SEED = 42
 
-# -------------- Utility / plotting --------------
 def set_seed(seed=42):
     random.seed(seed)
     torch.manual_seed(seed)
@@ -92,7 +91,7 @@ def plot_history(history, title="Training History", save_path=None, live=False):
         plt.savefig(save_path, bbox_inches='tight')
     plt.show()
 
-# -------------- Transformer building blocks --------------
+#Transformer
 class TransformerBlock(nn.Module):
     def __init__(self, d_embed, num_heads, dropout_rate=0.1):
         super().__init__()
@@ -137,18 +136,15 @@ class VisionEncoder(nn.Module):
     def __init__(self, d_embed, pretrained_model_name='vit_b_16'):
         super().__init__()
         
-        # 1. Load the pre-trained ViT model (ViT-Base, 16x16 patches)
-        # We specify the weights to load the model pre-trained on ImageNet.
         self.vit = models.vit_b_16(weights=models.ViT_B_16_Weights.IMAGENET1K_V1)
         
-        # The default ViT-B/16 output dimension before the classification head is 768.
+        #ViT-B/16 output dimension before the classification head is 768.
         vit_embed_dim = self.vit.hidden_dim 
 
         # 2. Remove the classification head
         self.vit.heads = nn.Identity()
 
         # 3. Add a custom projection layer
-        # This maps the ViT's 768 features to your decoder's d_embed (e.g., 256)
         self.projection_head = nn.Sequential(
             nn.Linear(vit_embed_dim, d_embed),
             nn.ReLU(),
@@ -156,8 +152,6 @@ class VisionEncoder(nn.Module):
         )
         
         # 4. Freeze the pre-trained ViT layers
-        # This saves memory and prevents the massive ViT from being trained on small meme data.
-        # Only the Projection Head and the Transformer Decoder will be trained (Fine-Tuning).
         for param in self.vit.parameters():
             param.requires_grad = False
             
@@ -166,18 +160,13 @@ class VisionEncoder(nn.Module):
             
         print(f"VisionEncoder loaded ViT-{pretrained_model_name} and froze weights.")
 
-    def forward(self, x):
-        # x: (B, C, H, W). The input image must be 224x224 (due to ViT pre-training).
-        
-        # Pass through the frozen ViT body
-        x = self.vit(x) # Output shape: (B, 768)
-        
-        # Project the features to the decoder's embedding size
-        x = self.projection_head(x) # Output shape: (B, d_embed)
+    def forward(self, x):        
+        x = self.vit(x)
+        x = self.projection_head(x)
         return x
 
 
-# -------------- Transformer decoder --------------
+#Transformer Decoder
 class TransformerDecoder(nn.Module):
     def __init__(self, vocab_size, d_embed=128, num_heads=4, max_length=512, n_blocks=4):
         super().__init__()
@@ -189,15 +178,14 @@ class TransformerDecoder(nn.Module):
         self.unembed = nn.Linear(d_embed, vocab_size)
 
     def forward(self, x, image_features):
-        # x: (B, seq_len_text), image_features: (B, d)
         if x.dim() != 2:
             raise ValueError("TransformerDecoder.forward expects x shape (batch, seq_len)")
         B, S = x.shape
-        tok_emb = self.embed(x)                              # (B, S, d)
+        tok_emb = self.embed(x)                            
         if image_features.dim() == 1:
             image_features = image_features.unsqueeze(0).expand(B, -1)
-        img_feat = image_features.unsqueeze(1)               # (B,1,d)
-        combined = torch.cat([img_feat, tok_emb], dim=1)     # (B, S+1, d)
+        img_feat = image_features.unsqueeze(1)             
+        combined = torch.cat([img_feat, tok_emb], dim=1) 
         L = combined.shape[1]
         if L > self.pos_embed.num_embeddings:
             raise ValueError(f"Caption too long for positional embeddings: {L} > {self.pos_embed.num_embeddings}")
@@ -207,13 +195,11 @@ class TransformerDecoder(nn.Module):
         attn_mask[0, :] = False
         for b in self.blocks:
             h = b(h, attn_mask)
-        logits = self.unembed(h[:, 1:, :])                   # (B, S, V)
+        logits = self.unembed(h[:, 1:, :])             
         return logits
 
 
-# -------------- Full model (Modified) --------------
 class ImageCaptioningModel(nn.Module):
-    # Removed: num_heads, n_blocks, img_size, patch_size, in_channels
     def __init__(self, vocab_size, d_embed=256, max_length=512): 
         super().__init__()
         
@@ -224,8 +210,8 @@ class ImageCaptioningModel(nn.Module):
         self.transformer_decoder = TransformerDecoder(
             vocab_size=vocab_size, 
             d_embed=d_embed, 
-            num_heads=4,        # Keep standard decoder params
-            n_blocks=4,         # Keep standard decoder params
+            num_heads=4,    
+            n_blocks=4,        
             max_length=max_length
         )
 
@@ -233,7 +219,8 @@ class ImageCaptioningModel(nn.Module):
         img_feat = self.vision_encoder(images)
         logits = self.transformer_decoder(caption_input, img_feat)
         return logits
-# -------------- Dataset & collate --------------
+
+
 class ImageCaptionDataset(Dataset):
     def __init__(self, image_filenames, captions, tokenizer, image_transform=None):
         self.image_filenames = image_filenames
@@ -264,7 +251,7 @@ def collate_fn(batch, padding_idx):
     imgs_b = torch.cat(imgs, dim=0)
     return imgs_b, inps_p, tgts_p
 
-# -------------- Evaluation & training helpers --------------
+#Evaluation
 def evaluate_model(model, dataloader, criterion, device, padding_idx, split_name="Test"):
     model.eval()
     total_loss = 0.0
@@ -292,52 +279,44 @@ def evaluate_model(model, dataloader, criterion, device, padding_idx, split_name
 
 def run_sequence_metrics(model, dataloader, tokenizer, device, padding_idx):
     model.eval()
-    
-    # Dictionaries to store ground truth (gts) and generated results (res)
-    # Format: {image_id: [list_of_reference_captions]}
     gts = {}
     res = {}
     
-    # Use a unique ID for each test image
     img_id_counter = 0
 
     with torch.no_grad():
-        # Using the test_loader is sufficient for final submission evaluation
         for images_b, inps_b, tgts_b in tqdm(dataloader, desc="Collecting Captions for Metrics"):
             images_b = images_b.to(device)
             
             for i in range(images_b.size(0)):
-                img_id = str(img_id_counter) # Metrics require string keys
+                img_id = str(img_id_counter)
                 
-                # 1. Generate Caption (use your chosen method/parameters for best results)
-                # Using Top-P/Greedy generation from your script:
+                #Using Top-P/Greedy generation
                 generated_cap = generate_greedy(model, images_b[i], tokenizer, device, max_len=50, temperature=0.9, top_p=0.9)
-                res[img_id] = [generated_cap] # Must be a list of strings
+                res[img_id] = [generated_cap] 
                 
-                # 2. Get Reference Caption 
+                #Get Reference Caption 
                 tgt_seq = tgts_b[i].tolist()
                 eos = tokenizer.word_to_index.get('<eos>', None)
                 ref = []
                 for tok in tgt_seq:
-                    # Filter out padding and EOS tokens
                     if tok == padding_idx: break
                     if eos is not None and tok == eos: break
                     ref.append(tok)
                 reference_text = tokenizer.decode(ref)
-                gts[img_id] = [reference_text] # Must be a list of strings
+                gts[img_id] = [reference_text] 
 
                 img_id_counter += 1
 
-    # 3. Compute Scores
+    #Compute Scores
     print("\n--- Computing Sequence Metrics (CIDEr & BLEU-4) ---")
     
-    # CIDEr Score (Best for consensus/relevance in image captioning)
+    # CIDEr Score
     cider_scorer = Cider()
     cider_score, _ = cider_scorer.compute_score(gts, res)
     
-    # BLEU-4 Score (Standard lexical check)
-    bleu_scorer = Bleu(4) # Measure up to 4-gram overlap
-    # The output score[3] contains the BLEU-4 score
+    # BLEU-4 Score
+    bleu_scorer = Bleu(4)
     bleu_scores, _ = bleu_scorer.compute_score(gts, res)
     bleu4_score = bleu_scores[3]
     
@@ -348,20 +327,6 @@ def run_sequence_metrics(model, dataloader, tokenizer, device, padding_idx):
     return cider_score, bleu4_score
 
 def plot_metrics(history, title="Training History", save_path=None, smooth=False, smooth_window=3, live=False, figsize=(10,4)):
-    """
-    Plot training/validation curves from a `history` dict.
-
-    Args:
-      history (dict): expected keys include 'train_loss', 'val_loss', 'val_accuracy' (but any numeric lists are supported).
-      title (str): figure title.
-      save_path (str|None): path to save the figure (PNG). If None, the figure is not saved.
-      smooth (bool): whether to smooth curves using a moving average.
-      smooth_window (int): smoothing window (odd recommended).
-      live (bool): if True, calls plt.pause(0.001) to enable live updating in notebooks.
-      figsize (tuple): figure size.
-    Returns:
-      str|None: path where the figure was saved, or None.
-    """
     if not isinstance(history, dict):
         raise ValueError("history must be a dict of lists")
 
@@ -389,7 +354,6 @@ def plot_metrics(history, title="Training History", save_path=None, smooth=False
     if loss_keys: n_plots += 1
     if acc_keys: n_plots += 1
     if n_plots == 0:
-        # fallback: one plot with all series
         n_plots = 1
         loss_keys = list(series.keys())
 
@@ -427,7 +391,7 @@ def plot_metrics(history, title="Training History", save_path=None, smooth=False
     return saved
 
 def run_optimizer_experiment(
-    model,                     # <-- train the provided model in-place
+    model,  
     tokenizer,
     train_dataloader,
     val_dataloader,
@@ -438,9 +402,6 @@ def run_optimizer_experiment(
     display=True,
     checkpoint_path=CHECKPOINT_PATH
 ):
-    """
-    Trains the provided model in-place and returns (history, trained_model).
-    """
     print(f"--- Starting Experiment: {config['name']} ---")
     model = model.to(device)
     optimizer = config['optimizer_class'](model.parameters(), **config.get('kwargs', {}))
@@ -475,8 +436,6 @@ def run_optimizer_experiment(
         history['val_loss'].append(val_loss)
         history['val_accuracy'].append(val_acc)
         
-        # --- REMOVED PLOT_METRICS FROM INSIDE THE LOOP ---
-
         # Save checkpoint each epoch
         torch.save({'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
@@ -492,7 +451,7 @@ def run_optimizer_experiment(
 
         print(f"Epoch {epoch+1} - Train Loss: {avg_train_loss:.4f} | Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}")
 
-    # --- ADDED PLOT_METRICS AFTER ALL EPOCHS ---
+    #Plot training and validation curves at the end
     print("\nTraining complete. Saving final history plot...")
     final_save_path = os.path.join(PLOT_DIR, f"{config['name']}_final_history.png")
     plot_metrics(history, 
@@ -500,24 +459,18 @@ def run_optimizer_experiment(
                  save_path=final_save_path, 
                  smooth=False, 
                  live=False)
-    # --- END ADDITION ---
-
     return history, model
 
 def save_example_image(tensor, filename, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
     """Denormalizes a tensor and saves it as a JPEG image."""
-    # Ensure the output directory exists
     os.makedirs(EXAMPLE_OUTPUT_DIR, exist_ok=True)
-    
-    # Clone tensor and move to CPU
     img_tensor = tensor.cpu().clone()
     
-    # Denormalize: Reverse the normalization process
-    # 1. Multiply by standard deviation
+    #Denormalize: Reverse the normalization process
     for t, m, s in zip(img_tensor, mean, std):
         t.mul_(s).add_(m)
         
-    # 2. Clamp values to [0, 1] range
+    #Clamp values to [0, 1] range
     img_tensor = torch.clamp(img_tensor, 0, 1)
     
     # 3. Convert (C, H, W) tensor to (H, W, C) numpy array (and scale to 0-255)
@@ -527,7 +480,7 @@ def save_example_image(tensor, filename, mean=[0.485, 0.456, 0.406], std=[0.229,
     img_pil = Image.fromarray(img_np)
     img_pil.save(os.path.join(EXAMPLE_OUTPUT_DIR, filename), 'JPEG')
 
-# -------------- Generation helpers --------------
+
 @torch.no_grad()
 def generate_greedy(model, image_tensor, tokenizer, device, max_len=30, min_len=1, temperature=1.0, top_p=0.9):
     model.eval()
@@ -538,17 +491,14 @@ def generate_greedy(model, image_tensor, tokenizer, device, max_len=30, min_len=
     sos = tokenizer.word_to_index['<sos>']
     eos = tokenizer.word_to_index.get('<eos>', None)
 
-    # cur shape: (batch=1, seq_len=1)
     cur = torch.tensor([[sos]], device=device, dtype=torch.long)
 
     for t in range(max_len):
-        logits = model(image_tensor, cur)           # (batch, seq_len, vocab)
-        # take last token logits
-        last_logits = logits[:, -1, :] / temperature  # (batch, vocab)
+        logits = model(image_tensor, cur)           
+        last_logits = logits[:, -1, :] / temperature 
 
-        # apply top-p (nucleus) sampling if requested
         if top_p < 1.0:
-            sorted_logits, sorted_indices = torch.sort(last_logits, descending=True, dim=-1)  # (batch, vocab)
+            sorted_logits, sorted_indices = torch.sort(last_logits, descending=True, dim=-1)
             sorted_probs = F.softmax(sorted_logits, dim=-1)
             cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
 
@@ -558,29 +508,25 @@ def generate_greedy(model, image_tensor, tokenizer, device, max_len=30, min_len=
             sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
             sorted_indices_to_remove[..., 0] = False
 
-            # set to -inf in sorted_logits
             sorted_logits = sorted_logits.masked_fill(sorted_indices_to_remove, float('-inf'))
 
             # scatter back to original ordering
-            # create a tensor same shape as last_logits and fill using sorted_indices
-            # Note: scatter requires same dtype; we convert to float and then place back
             filtered_logits = torch.full_like(last_logits, float('-inf'))
             filtered_logits.scatter_(1, sorted_indices, sorted_logits)
             last_logits = filtered_logits
 
-        # Sample
-        probs = F.softmax(last_logits, dim=-1)       # (batch, vocab)
-        nxt = torch.multinomial(probs, num_samples=1)  # (batch, 1)
+        probs = F.softmax(last_logits, dim=-1)      
+        nxt = torch.multinomial(probs, num_samples=1)  
         nxt = nxt.to(device).long()
 
         # Append to current sequence (concatenate along seq dim)
         cur = torch.cat([cur, nxt], dim=1)  # cur: (batch, seq_len+1)
 
-        # stop if EOS and minimum length satisfied (works for batch=1)
+        # stop if EOS and minimum length satisfied
         if eos is not None and nxt.numel() == 1 and nxt.item() == eos and cur.shape[1]-1 >= min_len:
             break
 
-    seq = cur.squeeze(0).tolist()[1:]  # drop the initial <sos>
+    seq = cur.squeeze(0).tolist()[1:]
     if eos is not None and eos in seq:
         seq = seq[:seq.index(eos)]
     model.train()
@@ -614,7 +560,7 @@ def generate_beam(model, image_tensor, tokenizer, device, max_len=30, beam_width
     model.train()
     return tokenizer.decode(best)
 
-# -------------- Diagnostics --------------
+#Diagnostics
 def first_token_stats(model, dataloader, tokenizer, device, max_batches=200):
     model.eval()
     from collections import Counter
@@ -635,7 +581,6 @@ def smooth_list(x, window=3):
     if window <= 1 or len(x) < window:
         return x
     arr = np.array(x, dtype=float)
-    # simple centered moving average (pad edges)
     pad = window // 2
     padded = np.pad(arr, (pad, pad), mode='edge')
     kernel = np.ones(window) / window
@@ -643,22 +588,20 @@ def smooth_list(x, window=3):
     return smoothed.tolist()
 
 
-# ============================================================
-# RUN: Dataset / model creation / train or load / generate
-# ============================================================
+# Run Dataset, model creation, train or load, generate
 if __name__ == "__main__":
     set_seed(SEED)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device:", device)
 
-    # ---------- 1) Load manifest (assumes manifest entries contain 'image' and 'caption') ----------
+    #Load manifest
     with open(MANIFEST_PATH, 'r') as f:
         image_data = json.load(f)
     image_filenames = [it['image'] for it in image_data]
     captions = [it['caption'] for it in image_data]
     print(f"Loaded {len(image_filenames)} items from {MANIFEST_PATH}")
 
-    # ---------- 2) transforms ----------
+    #Transform
     image_transform_train = transforms.Compose([
         transforms.RandomResizedCrop(224),
         transforms.RandomHorizontalFlip(),
@@ -672,7 +615,7 @@ if __name__ == "__main__":
         transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225])
     ])
 
-    # ---------- 3) Tokenizer (simple example) ----------
+    #Tokenizer
     class Tokenizer:
         def __init__(self, sentences):
             if isinstance(sentences, str): sentences = [sentences]
@@ -690,28 +633,22 @@ if __name__ == "__main__":
     padding_idx = tokenizer.word_to_index.get('<pad>', tokenizer.word_to_index.get('<unk>', 0))
     print("Vocab size:", len(tokenizer.vocab))
 
-# ======================================================================
-    # CRITICAL: SAVE THE EXACT TOKENIZER MAPPING
-    # This generates the file needed for the inference script to avoid mismatch.
-    # ======================================================================
     TOKENIZER_VOCAB_PATH = 'data/processed/tokenizer_vocab.json'
 
     # Package the mappings
     vocab_data = {
         'word_to_index': tokenizer.word_to_index,
-        # Convert index_to_word keys to strings for JSON serialization
         'index_to_word': {str(i):w for i,w in tokenizer.index_to_word.items()}
     }
 
-    # Save the file
+    #Save the file
     os.makedirs(os.path.dirname(TOKENIZER_VOCAB_PATH), exist_ok=True)
     with open(TOKENIZER_VOCAB_PATH, 'w') as f:
         json.dump(vocab_data, f, indent=4)
     print(f"Tokenizer vocabulary saved to {TOKENIZER_VOCAB_PATH}")
-    # ======================================================================
 
 
-    # ---------- 4) Train/val/test split & Dataloaders ----------
+    #Train/val/test split & Dataloaders
     n = len(image_filenames)
     train_frac, val_frac, test_frac = 0.8, 0.1, 0.1
     idxs = list(range(n)); random.Random(SEED).shuffle(idxs)
@@ -729,7 +666,7 @@ if __name__ == "__main__":
     test_ds  = ImageCaptionDataset(test_files, test_caps, tokenizer, image_transform_val)
 
     batch_size = 32
-    num_workers = 1   # use 0/1 if system warns about many workers
+    num_workers = 1 
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers,
                               collate_fn=lambda b: collate_fn(b, padding_idx))
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers,
@@ -738,8 +675,7 @@ if __name__ == "__main__":
                              collate_fn=lambda b: collate_fn(b, padding_idx))
     print("Dataset sizes -> train:", len(train_ds), "val:", len(val_ds), "test:", len(test_ds))
 
-    # ---------- 5) Model, criterion, config ----------
-    # compute max caption length and set decoder max_length accordingly
+    #Model, criterion, config
     max_enc_len = max(len(tokenizer.encode(c)) for c in captions)
     required_effective = max_enc_len + 2
     max_length_for_model = required_effective - 1
@@ -753,29 +689,26 @@ if __name__ == "__main__":
 
     criterion = nn.CrossEntropyLoss(ignore_index=padding_idx, label_smoothing=0.1)
 
-
-    # ---------- 6) TRAIN or LOAD ----------
+#Train or Load
 if TRAIN:
     set_seed(SEED)
     all_histories = {} 
     
-    # Run all defined experiments
     for exp_config in EXPERIMENT_CONFIGS:
         print(f"\n=============================================")
         print(f"Starting Experiment: {exp_config['name']}")
         print(f"=============================================")
 
-        # 1. CRITICAL: Re-initialize the model for a fresh start
+        #Re-initialize the model
         exp_model = ImageCaptioningModel(
             vocab_size=len(tokenizer.vocab),
             d_embed=d_embed,
             max_length=max_length_for_model
         ).to(device)
 
-        # 2. Define a unique checkpoint path for this run
         exp_checkpoint_path = os.path.join('models', f"meme_caption_{exp_config['name']}.pt")
 
-        # 3. Run the experiment
+        #Run the experiment
         history, final_trained_model_instance = run_optimizer_experiment(
             model=exp_model,
             tokenizer=tokenizer,
@@ -789,11 +722,9 @@ if TRAIN:
             checkpoint_path=exp_checkpoint_path
         )
         
-        # 4. Store the history for final comparison/plotting
+        #Store the history for final comparison/plotting
         all_histories[exp_config['name']] = history
         
-    # After all training, set the model to the last one trained for diagnostics
-    # NOTE: You might want to manually load the BEST one instead.
     trained_model = final_trained_model_instance 
 
 else:
@@ -810,11 +741,9 @@ else:
     
     # Load state into the initialized model (defined globally)
     model.load_state_dict(state_dict)
-    trained_model = model # Use the original 'model' object now that it's loaded
+    trained_model = model 
     print(f"Loaded checkpoint from {load_path}")
 
-
-# --- 7) Diagnostics and generation for ALL models ---
 
 # Initialize the model structure once to load all weights into
 eval_model = ImageCaptioningModel(
@@ -827,48 +756,42 @@ eval_model = ImageCaptioningModel(
 # Loop through each saved checkpoint name
 for checkpoint_name in CHECKPOINTS_TO_EVALUATE:
     print(f"\n\n=======================================================")
-    print(f"       ✨ Evaluating Model: {checkpoint_name} ✨")
+    print(f"        Evaluating Model: {checkpoint_name} ")
     print(f"=======================================================")
 
-    # A. Load the Checkpoint
     load_path = os.path.join('models', f"meme_caption_{checkpoint_name}.pt")
     
     try:
-        # Load the checkpoint file
         ckpt = torch.load(load_path, map_location=device)
         state_dict = ckpt.get('model_state_dict', ckpt)
         
-        # Handle DataParallel prefix if present
         if any(k.startswith('module.') for k in state_dict.keys()):
             state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
         
         # Load weights into the evaluation model
         eval_model.load_state_dict(state_dict)
-        trained_model = eval_model # Reference the loaded model for current evaluation round
+        trained_model = eval_model 
         print(f"Loaded checkpoint from {load_path}")
         
     except FileNotFoundError:
         print(f"!!! ERROR: Checkpoint not found at {load_path}. Skipping evaluation for this model. !!!")
-        continue # Skip to the next optimizer
+        continue 
 
-
-    # B. Run Diagnostics (First-token stats)
     print("First-token stats (top 10):", first_token_stats(trained_model, train_loader, tokenizer, device, max_batches=100)[:10])
 
     
-    # C. Show Examples (N examples from test set)
-    N = 5 # Changed from 10 to 5 for quicker output
+    #Show examples from test set
+    N = 5
     cnt = 0
     print(f"\n--- Generating {N} Examples ---")
     
-    # Nested loops required to iterate through batches and items within the batch
     for images_b, inps_b, tgts_b in test_loader:
         for i in range(images_b.size(0)): 
             if cnt >= N: break 
 
-            img = images_b[i] # Current image tensor
+            img = images_b[i]
             
-            # 1. Decode Reference Caption 
+            #Decode Reference Caption 
             tgt_seq = tgts_b[i].tolist()
             eos = tokenizer.word_to_index.get('<eos>', None)
             ref = []
@@ -878,15 +801,14 @@ for checkpoint_name in CHECKPOINTS_TO_EVALUATE:
                 ref.append(tok)
             ref_text = tokenizer.decode(ref)
             
-            # 2. Generate Predictions 
-            pred_greedy = generate_greedy(trained_model, images_b[i].unsqueeze(0), tokenizer, device, max_len=50, min_len=2, temperature = 0.9, top_p = 0.9)
-            pred_beam   = generate_beam(trained_model, images_b[i].unsqueeze(0), tokenizer, device, max_len=50, beam_width=3)
+            #Generate Predictions 
+            pred_greedy = generate_greedy(trained_model, img, tokenizer, device, max_len=50, min_len=2, temperature = 0.9, top_p = 0.9)
+            pred_beam   = generate_beam(trained_model, img, tokenizer, device, max_len=50, beam_width=3)
             
-            # 3. Create a descriptive filename and save the image (OPTIONAL: add optimizer name to filename)
+            #Create a descriptive filename and save the image
             base_filename = f"example_{checkpoint_name}_{cnt+1}.jpg"
-            save_example_image(img, base_filename) # Using your helper function
+            save_example_image(img, base_filename) 
 
-            # 4. Print Output
             print(f"=== Example {cnt+1} ({checkpoint_name}) ===")
             print("Reference:", ref_text)
             print("Greedy:", pred_greedy)
@@ -898,7 +820,7 @@ for checkpoint_name in CHECKPOINTS_TO_EVALUATE:
         if cnt >= N: break 
 
 
-    # D. Final Evaluation Metrics (Sequence Metrics are crucial for comparison)
+    #Final Evaluation Metrics
     eval_loss, eval_acc = evaluate_model(trained_model, test_loader, criterion, device, padding_idx, split_name=f"Test ({checkpoint_name})")
     
     cider_score, bleu4_score = run_sequence_metrics(trained_model, test_loader, tokenizer, device, padding_idx)

@@ -1,16 +1,13 @@
-# predict_image.py
-
 import torch
 from torch import nn
 from torchvision import transforms
-from torchvision import models # Added models import for ViT
+from torchvision import models
 from PIL import Image
 import argparse
 import os
 import json
 import torch.nn.functional as F
 
-# --- Hyperparameters MUST match training setup ---
 D_EMBED = 256
 NUM_HEADS = 4
 N_BLOCKS = 4
@@ -19,15 +16,10 @@ PATCH_SIZE = 16
 TOKENIZER_VOCAB_PATH = 'data/processed/tokenizer_vocab.json'
 MANIFEST_PATH = 'data/processed/imgflip575k_manifest.json'
 
-# ---------------------------------------------------------------------
-# --- MODEL ARCHITECTURE (MATCHES LATEST real_train_vit.py) ---
-# ---------------------------------------------------------------------
-
-# -------------- Transformer building blocks --------------
+#Transformers
 class TransformerBlock(nn.Module):
     def __init__(self, d_embed, num_heads, dropout_rate=0.1):
         super().__init__()
-        # Ensure consistency in MultiheadAttention arguments
         self.multihead_attn = nn.MultiheadAttention(d_embed, num_heads, batch_first=False)
         self.attn_norm = nn.LayerNorm(d_embed)
         self.attn_dropout = nn.Dropout(dropout_rate)
@@ -39,7 +31,6 @@ class TransformerBlock(nn.Module):
         self.ff_dropout = nn.Dropout(dropout_rate)
 
     def forward(self, x, attn_mask):
-        # Transpose input to (seq_len, batch, d_embed) for nn.MultiheadAttention
         if x.dim() == 2:
             x = x.unsqueeze(1)
         elif x.dim() == 3:
@@ -54,26 +45,19 @@ class TransformerBlock(nn.Module):
         h = h + self.ff_dropout(ff)
         h = self.ff_norm(h)
         
-        # Transpose back to (batch, seq_len, d_embed)
         return h.transpose(0, 1)
 
 
-# -------------- Vision encoder (Transfer Learning Structure) --------------
+#Vision encoder
 class VisionEncoder(nn.Module):
-    # Simplified __init__ matching the current structure in real_train_vit.py
     def __init__(self, d_embed, pretrained_model_name='vit_b_16'):
         super().__init__()
-        
-        # 1. Load the pre-trained ViT architecture (without new weights here)
-        # Note: We rely on the checkpoint to provide the trained weights (which include the ViT weights)
-        # We must use a fixed architecture definition that matches the *saved* structure.
+
         self.vit = models.vit_b_16(weights=None) 
         vit_embed_dim = self.vit.hidden_dim 
 
-        # 2. Remove the classification head
         self.vit.heads = nn.Identity()
 
-        # 3. Custom projection layer (as used in the trained model)
         self.projection_head = nn.Sequential(
             nn.Linear(vit_embed_dim, d_embed),
             nn.ReLU(),
@@ -81,15 +65,13 @@ class VisionEncoder(nn.Module):
         )
 
     def forward(self, x):
-        # Pass through the ViT body
-        x = self.vit(x) # Output shape: (B, 768)
+        x = self.vit(x)
         
-        # Project the features to the decoder's embedding size
-        x = self.projection_head(x) # Output shape: (B, d_embed)
+        x = self.projection_head(x) 
         return x
 
 
-# -------------- Transformer decoder --------------
+#Transformer decoder
 class TransformerDecoder(nn.Module):
     def __init__(self, vocab_size, d_embed=D_EMBED, num_heads=NUM_HEADS, max_length=512, n_blocks=N_BLOCKS):
         super().__init__()
@@ -125,16 +107,12 @@ class TransformerDecoder(nn.Module):
         return logits
 
 
-# -------------- Full model (Modified to match recent training script) --------------
 class ImageCaptioningModel(nn.Module):
-    # Simplified __init__ signature to match your current training script logic
     def __init__(self, vocab_size, d_embed=D_EMBED, max_length=512): 
         super().__init__()
         
-        # Initialize the Vision Encoder (which now contains the ViT)
         self.vision_encoder = VisionEncoder(d_embed=d_embed)
         
-        # Initialize the Transformer Decoder
         self.transformer_decoder = TransformerDecoder(
             vocab_size=vocab_size, 
             d_embed=d_embed, 
@@ -148,11 +126,6 @@ class ImageCaptioningModel(nn.Module):
         logits = self.transformer_decoder(caption_input, img_feat)
         return logits
         
-# --- End of required model class definitions ---
-
-# ---------------------------------------------------------------------
-# --- TOKENIZER (Must match training script's construction) ---
-# ---------------------------------------------------------------------
 class Tokenizer:
     def __init__(self, vocab_file):
         """Initializes the tokenizer by loading the exact vocab mapping."""
@@ -175,9 +148,7 @@ class Tokenizer:
     def decode(self, ids):
         return ' '.join(self.index_to_word.get(i, '<unk>') for i in ids)
 
-# ---------------------------------------------------------------------
-# --- GENERATION FUNCTIONS (Must match training script) ---
-# ---------------------------------------------------------------------
+
 @torch.no_grad()
 def generate_greedy(model, image_tensor, tokenizer, device, max_len=50, min_len=2, temperature=0.9, top_p=0.9):
     model.eval()
@@ -243,45 +214,33 @@ def generate_beam(model, image_tensor, tokenizer, device, max_len=50, beam_width
         best = best[:best.index(eos)]
     return tokenizer.decode(best)
 
-# ---------------------------------------------------------------------
-# --- CORE INFERENCE LOGIC ---
-# ---------------------------------------------------------------------
 
 def load_model_and_tokenizer(checkpoint_path, manifest_path, device):
     
-    # 1. Initialize the Tokenizer ONLY from the saved vocabulary file
     tokenizer = Tokenizer(vocab_file=TOKENIZER_VOCAB_PATH) 
     
-    # 2. Extract necessary values for model initialization
     vocab_size = len(tokenizer.vocab) 
     
-    # We still need the manifest to determine the maximum length for the decoder's positional embedding
     with open(manifest_path, 'r') as f:
         image_data = json.load(f)
     captions = [it['caption'] for it in image_data]
     
-    # Compute max length using the loaded tokenizer
     max_enc_len = max(len(tokenizer.encode(c)) for c in captions)
-    max_length_for_model = max_enc_len + 1 # +1 for the image feature prefix
+    max_length_for_model = max_enc_len + 1
 
-    # 3. Initialize Model (Using simplified constructor)
-    d_embed = D_EMBED # Use the defined D_EMBED from the constants block
+    d_embed = D_EMBED
     model = ImageCaptioningModel(vocab_size=vocab_size,
                                  d_embed=d_embed, 
                                  max_length=max_length_for_model).to(device)
 
-    # 4. Load weights 
     ckpt = torch.load(checkpoint_path, map_location=device)
-    # Extract model state dict
     state_dict = ckpt['model_state_dict']
     
-    # Load state dict
     model.load_state_dict(state_dict)
 
     return model, tokenizer
 
 def predict_from_path(image_path, model, tokenizer, device):
-    # Image transformations MUST match the validation/test transforms used in training!
     transform = transforms.Compose([
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
         transforms.ToTensor(),
@@ -307,22 +266,17 @@ def predict_from_path(image_path, model, tokenizer, device):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate captions for an input image using the trained model.")
-    # Define the required command-line argument for the image path
     parser.add_argument("image_path", type=str, help="Path to the input image file (e.g., ./my_meme.jpg)")
     args = parser.parse_args()
 
-    # --- Configuration (Must match training script) ---
     CHECKPOINT_PATH = 'models/meme_caption_vit.pt'
-    # MANIFEST_PATH is already defined in the constants block
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
     try:
-        # 1. Load the model and tokenizer
         loaded_model, loaded_tokenizer = load_model_and_tokenizer(CHECKPOINT_PATH, MANIFEST_PATH, device)
 
-        # 2. Run prediction using the provided image path
         predict_from_path(args.image_path, loaded_model, loaded_tokenizer, device)
 
     except FileNotFoundError as e:
