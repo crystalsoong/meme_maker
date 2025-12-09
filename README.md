@@ -28,8 +28,8 @@ To test the model with your own image, import the image into the ```test_images`
 **Video Links**
 
 [Project Demo](https://youtu.be/ebXJeOzNuqE)
+[Technical](https://youtu.be/AZjIljD-1O8g)
 
-Technical Walkthrough: This is a 5–10-minute video that shows and discusses how your project works. Think of this as the video you would show a fellow ML engineer to explain how you accomplished what you did. This video should help orient a grader to understand how your code works and where the machine learning concepts are being applied. It should also help a grader understand what was challenging about the project and where the significant technical contributions can be found. Like the project demo, this video should be stored in your repository and clearly linked in your README file.
 
 **Evaluation**
 
