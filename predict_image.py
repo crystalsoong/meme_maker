@@ -241,7 +241,7 @@ class TransformerDecoder(nn.Module):
         pos_idx = torch.arange(L, device=combined.device)
         h = combined + self.pos_embed(pos_idx).unsqueeze(0)
         attn_mask = torch.triu(torch.ones(L, L, dtype=torch.bool, device=combined.device), diagonal=1)
-        attn_mask[:, 0] = False
+        attn_mask[0, :] = False
         for b in self.blocks:
             h = b(h, attn_mask)
         logits = self.unembed(h[:, 1:, :])
@@ -373,7 +373,7 @@ def load_model_and_tokenizer(checkpoint_path, manifest_path, device):
     
     # 2. Extract necessary values for model initialization
     vocab_size = len(tokenizer.vocab) 
-
+    
     # We still need the manifest to determine the maximum length for the decoder's positional embedding
     with open(manifest_path, 'r') as f:
         image_data = json.load(f)
@@ -383,15 +383,18 @@ def load_model_and_tokenizer(checkpoint_path, manifest_path, device):
     max_enc_len = max(len(tokenizer.encode(c)) for c in captions)
     max_length_for_model = max_enc_len + 1 # +1 for the image feature prefix
 
-    # 3. Initialize Model (rest remains the same)
+    
+
+    # 3. Initialize Model 
     d_embed = 256; num_heads = 4; n_blocks = 4
     model = ImageCaptioningModel(vocab_size=vocab_size,
                                  d_embed=d_embed, num_heads=num_heads, n_blocks=n_blocks,
                                  max_length=max_length_for_model).to(device)
 
-    # 4. Load weights (rest remains the same)
+    # 4. Load weights 
     ckpt = torch.load(checkpoint_path, map_location=device)
-    # ... (code to load state_dict) ...
+    # --- FIX APPLIED HERE ---
+    state_dict = ckpt['model_state_dict']
     model.load_state_dict(state_dict)
 
     return model, tokenizer
@@ -415,10 +418,10 @@ def predict_from_path(image_path, model, tokenizer, device):
     # Generate captions
     print("\n--- Generating Captions ---")
     greedy_cap = generate_greedy(model, img_tensor, tokenizer, device, max_len=50, temperature=0.9, top_p=0.9)
-    print(f"Greedy/Top-P (temp=0.9, p=0.9): {greedy_cap}")
+    print(f"Greedy/Top-P (temp=0.7, p=0.9): {greedy_cap}")
 
     beam_cap = generate_beam(model, img_tensor, tokenizer, device, max_len=50, beam_width=5)
-    print(f"Beam Search (width=5):        {beam_cap}")
+    print(f"Beam Search (width=10):        {beam_cap}")
 
 
 if __name__ == "__main__":

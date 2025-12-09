@@ -15,9 +15,26 @@ import torch.nn.functional as F
 from PIL import Image
 from collections import OrderedDict
 import numpy as np
+# Add this block near the top of your file, after imports like 'import torch.nn.functional as F'
+
+# --- REQUIRED IMPORTS FOR SEQUENCE METRICS (Assuming you installed pycocoevalcap) ---
+try:
+    from pycocoevalcap.bleu.bleu import Bleu
+    from pycocoevalcap.cider.cider import Cider
+    # from pycocoevalcap.tokenizer.ptbtokenizer import PTBTokenizer # Only needed if running manually
+    print("Sequence metric classes imported successfully.")
+except ImportError:
+    print("WARNING: pycocoevalcap not found. Cannot run sequence metrics.")
+    # Define dummy classes to prevent runtime crash if installation failed
+    class DummyBleu:
+        def compute_score(self, gts, res): return (0, [0] * 4) 
+    class DummyCider:
+        def compute_score(self, gts, res): return (0, 0)
+    Bleu, Cider = DummyBleu, DummyCider
+
 
 # -------------- Hyper / Paths --------------
-TRAIN = True   # <-- Set True to train, False to load and run inference
+TRAIN = False   # <-- Set True to train, False to load and run inference
 MANIFEST_PATH = 'data/processed/imgflip575k_manifest.json'   # update to your dataset manifest
 CHECKPOINT_PATH = 'models/meme_caption_vit.pt'               # where to save / load model
 PLOT_DIR = 'plots'
@@ -213,6 +230,64 @@ def evaluate_model(model, dataloader, criterion, device, padding_idx, split_name
     print(f"  > {split_name} Loss: {avg_loss:.4f}, {split_name} Accuracy: {acc:.4f}")
     model.train()
     return avg_loss, acc
+
+
+def run_sequence_metrics(model, dataloader, tokenizer, device, padding_idx):
+    model.eval()
+    
+    # Dictionaries to store ground truth (gts) and generated results (res)
+    # Format: {image_id: [list_of_reference_captions]}
+    gts = {}
+    res = {}
+    
+    # Use a unique ID for each test image
+    img_id_counter = 0
+
+    with torch.no_grad():
+        # Using the test_loader is sufficient for final submission evaluation
+        for images_b, inps_b, tgts_b in tqdm(dataloader, desc="Collecting Captions for Metrics"):
+            images_b = images_b.to(device)
+            
+            for i in range(images_b.size(0)):
+                img_id = str(img_id_counter) # Metrics require string keys
+                
+                # 1. Generate Caption (use your chosen method/parameters for best results)
+                # Using Top-P/Greedy generation from your script:
+                generated_cap = generate_greedy(model, images_b[i], tokenizer, device, max_len=50, temperature=0.9, top_p=0.9)
+                res[img_id] = [generated_cap] # Must be a list of strings
+                
+                # 2. Get Reference Caption 
+                tgt_seq = tgts_b[i].tolist()
+                eos = tokenizer.word_to_index.get('<eos>', None)
+                ref = []
+                for tok in tgt_seq:
+                    # Filter out padding and EOS tokens
+                    if tok == padding_idx: break
+                    if eos is not None and tok == eos: break
+                    ref.append(tok)
+                reference_text = tokenizer.decode(ref)
+                gts[img_id] = [reference_text] # Must be a list of strings
+
+                img_id_counter += 1
+
+    # 3. Compute Scores
+    print("\n--- Computing Sequence Metrics (CIDEr & BLEU-4) ---")
+    
+    # CIDEr Score (Best for consensus/relevance in image captioning)
+    cider_scorer = Cider()
+    cider_score, _ = cider_scorer.compute_score(gts, res)
+    
+    # BLEU-4 Score (Standard lexical check)
+    bleu_scorer = Bleu(4) # Measure up to 4-gram overlap
+    # The output score[3] contains the BLEU-4 score
+    bleu_scores, _ = bleu_scorer.compute_score(gts, res)
+    bleu4_score = bleu_scores[3]
+    
+    print(f"CIDEr-D Score: {cider_score:.4f}")
+    print(f"BLEU-4 Score: {bleu4_score:.4f}")
+
+    model.train()
+    return cider_score, bleu4_score
 
 def run_optimizer_experiment(
     model,                     # <-- train the provided model in-place
@@ -591,13 +666,14 @@ if __name__ == "__main__":
 
     criterion = nn.CrossEntropyLoss(ignore_index=padding_idx, label_smoothing=0.1)
 
+
     config = {
-        'name': 'default_experiment',
-        'optimizer_class': torch.optim.AdamW,
-        'kwargs': {'lr':3e-4, 'weight_decay':1e-4},
-        'scheduler_class': None,
-        'scheduler_kwargs': {}
-    }
+    'name': 'default_experiment_with_scheduler',
+    'optimizer_class': torch.optim.AdamW,
+    'kwargs': {'lr':3e-4, 'weight_decay':1e-4},
+    'scheduler_class': torch.optim.lr_scheduler.ReduceLROnPlateau, # Use this scheduler
+    'scheduler_kwargs': {'mode': 'min', 'factor': 0.5, 'patience': 2} # Reduce LR if Val Loss plateaus
+}
 
     # ---------- 6) TRAIN or LOAD ----------
     if TRAIN:
@@ -654,8 +730,13 @@ if __name__ == "__main__":
             if cnt >= N: break
         if cnt >= N: break
 
-    # Final evaluation (token-level)
+# Final evaluation (token-level) - Still useful for comparison
     eval_loss, eval_acc = evaluate_model(trained_model, test_loader, criterion, device, padding_idx, split_name="Final Test")
-    print(f"Final test loss: {eval_loss:.4f}, test accuracy: {eval_acc:.4f}")
-
-# End of script
+    print(f"Final token-level accuracy: {eval_acc:.4f}")
+    
+    # --- Run Sequence Metrics for Submission ---
+    cider_score, bleu4_score = run_sequence_metrics(trained_model, test_loader, tokenizer, device, padding_idx)
+    
+    print("\n=======================================================")
+    print(f"Final Submission Metrics: CIDEr-D={cider_score:.4f}, BLEU-4={bleu4_score:.4f}")
+    print("=======================================================")
