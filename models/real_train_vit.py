@@ -31,10 +31,11 @@ except ImportError:
 
 
 # -------------- Hyper / Paths --------------
-TRAIN = True   # <-- Set True to train, False to load and run inference
+TRAIN = False   # <-- Set True to train, False to load and run inference
 MANIFEST_PATH = 'data/processed/imgflip575k_manifest.json'
 CHECKPOINT_PATH = 'models/meme_caption_vit.pt'
-PLOT_DIR = 'plots'
+EXAMPLE_OUTPUT_DIR = 'eval/image_examples'
+PLOT_DIR = 'eval/plots'
 SEED = 42
 
 # -------------- Utility / plotting --------------
@@ -352,6 +353,85 @@ def run_sequence_metrics(model, dataloader, tokenizer, device, padding_idx):
     model.train()
     return cider_score, bleu4_score
 
+def plot_metrics(history, title="Training History", save_path=None, smooth=False, smooth_window=3, live=False, figsize=(10,4)):
+    """
+    Plot training/validation curves from a `history` dict.
+
+    Args:
+      history (dict): expected keys include 'train_loss', 'val_loss', 'val_accuracy' (but any numeric lists are supported).
+      title (str): figure title.
+      save_path (str|None): path to save the figure (PNG). If None, the figure is not saved.
+      smooth (bool): whether to smooth curves using a moving average.
+      smooth_window (int): smoothing window (odd recommended).
+      live (bool): if True, calls plt.pause(0.001) to enable live updating in notebooks.
+      figsize (tuple): figure size.
+    Returns:
+      str|None: path where the figure was saved, or None.
+    """
+    if not isinstance(history, dict):
+        raise ValueError("history must be a dict of lists")
+
+    # pick known keys if present, otherwise plot whatever numeric lists found
+    keys_order = ['train_loss', 'val_loss', 'train_accuracy', 'val_accuracy']
+    available = [k for k in keys_order if k in history]
+    # fallback: any numeric list keys not in keys_order
+    other_keys = [k for k in history.keys() if k not in keys_order and isinstance(history[k], (list, tuple))]
+    available += other_keys
+
+    if not available:
+        raise ValueError("No plottable keys found in history. Expected keys like 'train_loss', 'val_loss', 'val_accuracy'.")
+
+    # Prepare smoothed or raw series
+    series = OrderedDict()
+    for k in available:
+        vals = list(history[k])
+        series[k] = smooth_list(vals, window=smooth_window) if smooth else vals
+
+    # Determine number of subplots: up to 2 (loss and accuracy) grouped logically
+    loss_keys = [k for k in series.keys() if 'loss' in k]
+    acc_keys = [k for k in series.keys() if 'acc' in k or 'accuracy' in k]
+
+    n_plots = 0
+    if loss_keys: n_plots += 1
+    if acc_keys: n_plots += 1
+    if n_plots == 0:
+        # fallback: one plot with all series
+        n_plots = 1
+        loss_keys = list(series.keys())
+
+    plt.figure(figsize=figsize)
+    plot_i = 1
+
+    if loss_keys:
+        plt.subplot(1, n_plots, plot_i)
+        for k in loss_keys:
+            plt.plot(range(1, len(series[k]) + 1), series[k], label=k)
+        plt.xlabel('Epoch'); plt.ylabel('Loss'); plt.title('Loss')
+        plt.grid(True); plt.legend()
+        plot_i += 1
+
+    if acc_keys:
+        plt.subplot(1, n_plots, plot_i)
+        for k in acc_keys:
+            plt.plot(range(1, len(series[k]) + 1), series[k], label=k)
+        plt.xlabel('Epoch'); plt.ylabel('Accuracy'); plt.title('Accuracy')
+        plt.grid(True); plt.legend()
+
+    plt.suptitle(title)
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+    saved = None
+    if save_path is not None:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, bbox_inches='tight')
+        saved = save_path
+
+    if live:
+        plt.pause(0.001)
+
+    plt.show()
+    return saved
+
 def run_optimizer_experiment(
     model,                     # <-- train the provided model in-place
     tokenizer,
@@ -400,8 +480,8 @@ def run_optimizer_experiment(
         val_loss, val_acc = evaluate_model(model, val_dataloader, criterion, device, padding_idx, split_name=config['name'])
         history['val_loss'].append(val_loss)
         history['val_accuracy'].append(val_acc)
-
-        plot_metrics(history, title=f"Experiment: {config['name']}", save_path=os.path.join(PLOT_DIR, f"{config['name']}_history.png"), smooth=False, live=True)
+        
+        # --- REMOVED PLOT_METRICS FROM INSIDE THE LOOP ---
 
         # Save checkpoint each epoch
         torch.save({'model_state_dict': model.state_dict(),
@@ -418,7 +498,40 @@ def run_optimizer_experiment(
 
         print(f"Epoch {epoch+1} - Train Loss: {avg_train_loss:.4f} | Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}")
 
+    # --- ADDED PLOT_METRICS AFTER ALL EPOCHS ---
+    print("\nTraining complete. Saving final history plot...")
+    final_save_path = os.path.join(PLOT_DIR, f"{config['name']}_final_history.png")
+    plot_metrics(history, 
+                 title=f"Final Training History: {config['name']}", 
+                 save_path=final_save_path, 
+                 smooth=False, 
+                 live=False)
+    # --- END ADDITION ---
+
     return history, model
+
+def save_example_image(tensor, filename, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
+    """Denormalizes a tensor and saves it as a JPEG image."""
+    # Ensure the output directory exists
+    os.makedirs(EXAMPLE_OUTPUT_DIR, exist_ok=True)
+    
+    # Clone tensor and move to CPU
+    img_tensor = tensor.cpu().clone()
+    
+    # Denormalize: Reverse the normalization process
+    # 1. Multiply by standard deviation
+    for t, m, s in zip(img_tensor, mean, std):
+        t.mul_(s).add_(m)
+        
+    # 2. Clamp values to [0, 1] range
+    img_tensor = torch.clamp(img_tensor, 0, 1)
+    
+    # 3. Convert (C, H, W) tensor to (H, W, C) numpy array (and scale to 0-255)
+    img_np = (img_tensor.numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
+    
+    # Convert NumPy array to PIL Image and save
+    img_pil = Image.fromarray(img_np)
+    img_pil.save(os.path.join(EXAMPLE_OUTPUT_DIR, filename), 'JPEG')
 
 # -------------- Generation helpers --------------
 @torch.no_grad()
@@ -535,85 +648,6 @@ def smooth_list(x, window=3):
     smoothed = np.convolve(padded, kernel, mode='valid')
     return smoothed.tolist()
 
-def plot_metrics(history, title="Training History", save_path=None, smooth=False, smooth_window=3, live=False, figsize=(10,4)):
-    """
-    Plot training/validation curves from a `history` dict.
-
-    Args:
-      history (dict): expected keys include 'train_loss', 'val_loss', 'val_accuracy' (but any numeric lists are supported).
-      title (str): figure title.
-      save_path (str|None): path to save the figure (PNG). If None, the figure is not saved.
-      smooth (bool): whether to smooth curves using a moving average.
-      smooth_window (int): smoothing window (odd recommended).
-      live (bool): if True, calls plt.pause(0.001) to enable live updating in notebooks.
-      figsize (tuple): figure size.
-    Returns:
-      str|None: path where the figure was saved, or None.
-    """
-    if not isinstance(history, dict):
-        raise ValueError("history must be a dict of lists")
-
-    # pick known keys if present, otherwise plot whatever numeric lists found
-    keys_order = ['train_loss', 'val_loss', 'train_accuracy', 'val_accuracy']
-    available = [k for k in keys_order if k in history]
-    # fallback: any numeric list keys not in keys_order
-    other_keys = [k for k in history.keys() if k not in keys_order and isinstance(history[k], (list, tuple))]
-    available += other_keys
-
-    if not available:
-        raise ValueError("No plottable keys found in history. Expected keys like 'train_loss', 'val_loss', 'val_accuracy'.")
-
-    # Prepare smoothed or raw series
-    series = OrderedDict()
-    for k in available:
-        vals = list(history[k])
-        series[k] = smooth_list(vals, window=smooth_window) if smooth else vals
-
-    # Determine number of subplots: up to 2 (loss and accuracy) grouped logically
-    loss_keys = [k for k in series.keys() if 'loss' in k]
-    acc_keys = [k for k in series.keys() if 'acc' in k or 'accuracy' in k]
-
-    n_plots = 0
-    if loss_keys: n_plots += 1
-    if acc_keys: n_plots += 1
-    if n_plots == 0:
-        # fallback: one plot with all series
-        n_plots = 1
-        loss_keys = list(series.keys())
-
-    plt.figure(figsize=figsize)
-    plot_i = 1
-
-    if loss_keys:
-        plt.subplot(1, n_plots, plot_i)
-        for k in loss_keys:
-            plt.plot(range(1, len(series[k]) + 1), series[k], label=k)
-        plt.xlabel('Epoch'); plt.ylabel('Loss'); plt.title('Loss')
-        plt.grid(True); plt.legend()
-        plot_i += 1
-
-    if acc_keys:
-        plt.subplot(1, n_plots, plot_i)
-        for k in acc_keys:
-            plt.plot(range(1, len(series[k]) + 1), series[k], label=k)
-        plt.xlabel('Epoch'); plt.ylabel('Accuracy'); plt.title('Accuracy')
-        plt.grid(True); plt.legend()
-
-    plt.suptitle(title)
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-
-    saved = None
-    if save_path is not None:
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        plt.savefig(save_path, bbox_inches='tight')
-        saved = save_path
-
-    if live:
-        plt.pause(0.001)
-
-    plt.show()
-    return saved
-
 
 # ============================================================
 # RUN: Dataset / model creation / train or load / generate
@@ -681,9 +715,6 @@ if __name__ == "__main__":
         json.dump(vocab_data, f, indent=4)
     print(f"Tokenizer vocabulary saved to {TOKENIZER_VOCAB_PATH}")
     # ======================================================================
-
-
-
 
 
     # ---------- 4) Train/val/test split & Dataloaders ----------
@@ -766,13 +797,14 @@ if __name__ == "__main__":
     # ---------- 7) Diagnostics and generation ----------
     print("First-token stats (top 10):", first_token_stats(trained_model, train_loader, tokenizer, device, max_batches=100)[:10])
 
-    # Show a few examples (first N from test set)
+# Show a few examples (first N from test set)
     N = 10
     cnt = 0
     for images_b, inps_b, tgts_b in test_loader:
         for i in range(images_b.size(0)):
-            img = images_b[i]            # (C,H,W)
-            # reference decode (strip pads/eos)
+            img = images_b[i]  # (C,H,W)
+            
+            # 1. Decode Reference Caption (This is okay to do first)
             tgt_seq = tgts_b[i].tolist()
             eos = tokenizer.word_to_index.get('<eos>', None)
             ref = []
@@ -781,13 +813,24 @@ if __name__ == "__main__":
                 if eos is not None and tok == eos: break
                 ref.append(tok)
             ref_text = tokenizer.decode(ref)
+            
+            # 2. ***CRITICAL FIX: GENERATE PREDICTIONS HERE***
+            # These lines define pred_greedy and pred_beam
             pred_greedy = generate_greedy(trained_model, img, tokenizer, device, max_len=50, min_len=2, temperature = 0.9, top_p = 0.9)
             pred_beam   = generate_beam(trained_model, img, tokenizer, device, max_len=50, beam_width=3)
-            print(f"=== Example {cnt+1} ===")
+            
+            # 3. Create a descriptive filename using the defined prediction variable
+            base_filename = f"example_{cnt+1}_greedy.jpg"
+            
+            # 4. Save the image and print output
+            save_example_image(images_b[i], base_filename)
+
+            print(f"=== Example {cnt+1} (Saved as: {base_filename}) ===")
             print("Reference:", ref_text)
             print("Greedy:", pred_greedy)
             print("Beam:", pred_beam)
             print()
+            
             cnt += 1
             if cnt >= N: break
         if cnt >= N: break

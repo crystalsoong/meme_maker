@@ -16,5 +16,10 @@ If evaluating the model:
 1. Go to the ```real_train_vit.py``` file within the models folder and turn TRAIN to False
 2. Run ```python3 models/real_train_vit.py``` to run and evaluate the model
 
-Model Predictions:
-FINISH
+Model Evaluation:
+1. Each corresponding meme image used in the 10 example outputs given to the model for testing is found in the ```eval/image_examples``` folder
+2. The training and validation curve plots for each experiment are found in the ```eval/plots``` folder
+
+Model Testing (Giving the model a meme image to generate a caption for):
+1. To give the model a meme image, import the image into the ```test_images``` folder
+2. Run ```python3 predict_image.py``` to generate a corresponding caption
