@@ -11,6 +11,7 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from IPython.display import clear_output
 from torchvision import transforms
+from torchvision import models
 import torch.nn.functional as F
 from PIL import Image
 from collections import OrderedDict
@@ -34,7 +35,7 @@ except ImportError:
 
 
 # -------------- Hyper / Paths --------------
-TRAIN = False   # <-- Set True to train, False to load and run inference
+TRAIN = True   # <-- Set True to train, False to load and run inference
 MANIFEST_PATH = 'data/processed/imgflip575k_manifest.json'   # update to your dataset manifest
 CHECKPOINT_PATH = 'models/meme_caption_vit.pt'               # where to save / load model
 PLOT_DIR = 'plots'
@@ -108,26 +109,70 @@ class TransformerBlock(nn.Module):
             raise ValueError(f"Unsupported input dim {x.dim()} in TransformerBlock")
 
 # -------------- Vision encoder --------------
+# class VisionEncoder(nn.Module):
+#     def __init__(self, d_embed, num_heads, n_blocks, img_size=224, patch_size=16, in_channels=3):
+#         super().__init__()
+#         self.patch_size = patch_size
+#         self.num_patches = (img_size // patch_size) ** 2
+#         self.patch_embedding = nn.Conv2d(in_channels, d_embed, kernel_size=patch_size, stride=patch_size)
+#         self.positional_embedding = nn.Embedding(self.num_patches, d_embed)
+#         self.blocks = nn.ModuleList([TransformerBlock(d_embed, num_heads) for _ in range(n_blocks)])
+#         self.norm = nn.LayerNorm(d_embed)
+
+#     def forward(self, x):
+#         # x: (B, C, H, W)
+#         x = self.patch_embedding(x)                          # (B, d, H', W')
+#         x = x.flatten(2).transpose(1, 2)                    # (B, num_patches, d)
+#         pos = torch.arange(self.num_patches, device=x.device)
+#         x = x + self.positional_embedding(pos).unsqueeze(0)
+#         for b in self.blocks:
+#             x = b(x, None)
+#         x = self.norm(x)
+#         return x.mean(dim=1)  # (B, d)
+
 class VisionEncoder(nn.Module):
-    def __init__(self, d_embed, num_heads, n_blocks, img_size=224, patch_size=16, in_channels=3):
+    def __init__(self, d_embed, pretrained_model_name='vit_b_16'):
         super().__init__()
-        self.patch_size = patch_size
-        self.num_patches = (img_size // patch_size) ** 2
-        self.patch_embedding = nn.Conv2d(in_channels, d_embed, kernel_size=patch_size, stride=patch_size)
-        self.positional_embedding = nn.Embedding(self.num_patches, d_embed)
-        self.blocks = nn.ModuleList([TransformerBlock(d_embed, num_heads) for _ in range(n_blocks)])
-        self.norm = nn.LayerNorm(d_embed)
+        
+        # 1. Load the pre-trained ViT model (ViT-Base, 16x16 patches)
+        # We specify the weights to load the model pre-trained on ImageNet.
+        self.vit = models.vit_b_16(weights=models.ViT_B_16_Weights.IMAGENET1K_V1)
+        
+        # The default ViT-B/16 output dimension before the classification head is 768.
+        vit_embed_dim = self.vit.hidden_dim 
+
+        # 2. Remove the classification head
+        self.vit.heads = nn.Identity()
+
+        # 3. Add a custom projection layer
+        # This maps the ViT's 768 features to your decoder's d_embed (e.g., 256)
+        self.projection_head = nn.Sequential(
+            nn.Linear(vit_embed_dim, d_embed),
+            nn.ReLU(),
+            nn.LayerNorm(d_embed)
+        )
+        
+        # 4. Freeze the pre-trained ViT layers
+        # This saves memory and prevents the massive ViT from being trained on small meme data.
+        # Only the Projection Head and the Transformer Decoder will be trained (Fine-Tuning).
+        for param in self.vit.parameters():
+            param.requires_grad = False
+            
+        for param in self.projection_head.parameters():
+            param.requires_grad = True # Keep the projection head trainable
+            
+        print(f"VisionEncoder loaded ViT-{pretrained_model_name} and froze weights.")
 
     def forward(self, x):
-        # x: (B, C, H, W)
-        x = self.patch_embedding(x)                          # (B, d, H', W')
-        x = x.flatten(2).transpose(1, 2)                    # (B, num_patches, d)
-        pos = torch.arange(self.num_patches, device=x.device)
-        x = x + self.positional_embedding(pos).unsqueeze(0)
-        for b in self.blocks:
-            x = b(x, None)
-        x = self.norm(x)
-        return x.mean(dim=1)  # (B, d)
+        # x: (B, C, H, W). The input image must be 224x224 (due to ViT pre-training).
+        
+        # Pass through the frozen ViT body
+        x = self.vit(x) # Output shape: (B, 768)
+        
+        # Project the features to the decoder's embedding size
+        x = self.projection_head(x) # Output shape: (B, d_embed)
+        return x
+
 
 # -------------- Transformer decoder --------------
 class TransformerDecoder(nn.Module):
@@ -163,18 +208,41 @@ class TransformerDecoder(nn.Module):
         return logits
 
 # -------------- Full model --------------
+# class ImageCaptioningModel(nn.Module):
+#     def __init__(self, vocab_size, d_embed=128, num_heads=4, n_blocks=4, max_length=512,
+#                  img_size=224, patch_size=16, in_channels=3):
+#         super().__init__()
+#         self.vision_encoder = VisionEncoder(d_embed, num_heads, n_blocks, img_size, patch_size, in_channels)
+#         self.transformer_decoder = TransformerDecoder(vocab_size, d_embed, num_heads, max_length, n_blocks)
+
+#     def forward(self, images, caption_input):
+#         img_feat = self.vision_encoder(images)
+#         logits = self.transformer_decoder(caption_input, img_feat)
+#         return logits
+
+
+# -------------- Full model (Modified) --------------
 class ImageCaptioningModel(nn.Module):
-    def __init__(self, vocab_size, d_embed=128, num_heads=4, n_blocks=4, max_length=512,
-                 img_size=224, patch_size=16, in_channels=3):
+    # Removed: num_heads, n_blocks, img_size, patch_size, in_channels
+    def __init__(self, vocab_size, d_embed=256, max_length=512): 
         super().__init__()
-        self.vision_encoder = VisionEncoder(d_embed, num_heads, n_blocks, img_size, patch_size, in_channels)
-        self.transformer_decoder = TransformerDecoder(vocab_size, d_embed, num_heads, max_length, n_blocks)
+        
+        # Use the new pre-trained VisionEncoder
+        self.vision_encoder = VisionEncoder(d_embed=d_embed)
+        
+        # Keep the decoder the same (it still needs its parameters)
+        self.transformer_decoder = TransformerDecoder(
+            vocab_size=vocab_size, 
+            d_embed=d_embed, 
+            num_heads=4,        # Keep standard decoder params
+            n_blocks=4,         # Keep standard decoder params
+            max_length=max_length
+        )
 
     def forward(self, images, caption_input):
         img_feat = self.vision_encoder(images)
         logits = self.transformer_decoder(caption_input, img_feat)
         return logits
-
 # -------------- Dataset & collate --------------
 class ImageCaptionDataset(Dataset):
     def __init__(self, image_filenames, captions, tokenizer, image_transform=None):
@@ -659,9 +727,8 @@ if __name__ == "__main__":
     d_embed = 256; num_heads = 4; n_blocks = 4; img_size=224; patch_size=16
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = ImageCaptioningModel(vocab_size=len(tokenizer.vocab),
-                                 d_embed=d_embed, num_heads=num_heads, n_blocks=n_blocks,
-                                 max_length=max_length_for_model, img_size=img_size,
-                                 patch_size=patch_size).to(device)
+                                 d_embed=d_embed,
+                                 max_length=max_length_for_model).to(device)
     print("Decoder pos emb size:", model.transformer_decoder.pos_embed.num_embeddings)
 
     criterion = nn.CrossEntropyLoss(ignore_index=padding_idx, label_smoothing=0.1)
