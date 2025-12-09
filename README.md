@@ -58,12 +58,7 @@ We can see that both the train loss and validation loss steadily decreased, and 
 Model Final Testings:
 We tested our model with some meme images without text to see what the model would generate as captions. Though the outputs of the model don't follow traditional meme sentence structure, we still got a good laugh at the results. Here are some of our favorite examples: 
 
-![mega](eval/test_images/test_megamind.jpeg)
-**test? down? test? test? test? test? test? “down? test? you good?**
-
-
-![pika](eval/test_images/test_pikachu.jpeg)
-**iwant pajama pizza morgs shocked...y'all no "irs job." anxiety: interesting "doesn't you!!!**
+![readme](eval/test_images/readme_pic.jpeg)
 
 
 **Individual Contributions**
