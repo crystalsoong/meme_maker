@@ -8,6 +8,7 @@ The Meme Maker Model takes inputted images and produces funny captions in an end
 **Quick Start**
 a Quick Start section that concisely explains how to run your project,
 
+
 **Video Links**
 a Video Links section with direct links to your demo and technical walkthrough videos,
 
@@ -15,4 +16,4 @@ a Video Links section with direct links to your demo and technical walkthrough v
 an Evaluation section that presents any quantitative results, accuracy metrics, or qualitative outcomes from testing,
 
 **Individual Contributions**
-Crystal Soong and Alan Lu contributed equally to the brainstorming, development, testing, and documentation of the Meme Maker Model. The work was split evenly and both partners worked together on the project. 
+Crystal Soong and Alan Lu contributed equally to the brainstorming, development, testing, and documentation of the Meme Maker Model. The work was split evenly and both partners worked together to complete the project. 

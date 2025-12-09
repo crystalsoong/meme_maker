@@ -9,12 +9,6 @@ import os
 import json
 import torch.nn.functional as F
 
-# ---------------------------------------------------------------------
-# --- MODEL ARCHITECTURE (CRITICAL: PASTE ENTIRE CLASSES BELOW) ---
-# ---------------------------------------------------------------------
-
-# You MUST paste the complete classes here:
-# - TransformerBlock
 
 # -------------- Transformer building blocks --------------
 class TransformerBlock(nn.Module):

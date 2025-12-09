@@ -16,17 +16,13 @@ import torch.nn.functional as F
 from PIL import Image
 from collections import OrderedDict
 import numpy as np
-# Add this block near the top of your file, after imports like 'import torch.nn.functional as F'
 
-# --- REQUIRED IMPORTS FOR SEQUENCE METRICS (Assuming you installed pycocoevalcap) ---
 try:
     from pycocoevalcap.bleu.bleu import Bleu
     from pycocoevalcap.cider.cider import Cider
-    # from pycocoevalcap.tokenizer.ptbtokenizer import PTBTokenizer # Only needed if running manually
     print("Sequence metric classes imported successfully.")
 except ImportError:
     print("WARNING: pycocoevalcap not found. Cannot run sequence metrics.")
-    # Define dummy classes to prevent runtime crash if installation failed
     class DummyBleu:
         def compute_score(self, gts, res): return (0, [0] * 4) 
     class DummyCider:
@@ -36,8 +32,8 @@ except ImportError:
 
 # -------------- Hyper / Paths --------------
 TRAIN = True   # <-- Set True to train, False to load and run inference
-MANIFEST_PATH = 'data/processed/imgflip575k_manifest.json'   # update to your dataset manifest
-CHECKPOINT_PATH = 'models/meme_caption_vit.pt'               # where to save / load model
+MANIFEST_PATH = 'data/processed/imgflip575k_manifest.json'
+CHECKPOINT_PATH = 'models/meme_caption_vit.pt'
 PLOT_DIR = 'plots'
 SEED = 42
 
@@ -81,7 +77,6 @@ class TransformerBlock(nn.Module):
         self.ff_dropout = nn.Dropout(dropout_rate)
 
     def forward(self, x, attn_mask):
-        # unbatched seq-first: (seq_len, d_embed) OR batched (batch, seq_len, d_embed)
         if x.dim() == 2:
             x_b = x.unsqueeze(1)
             attn_out_b, _ = self.multihead_attn(x_b, x_b, x_b, attn_mask=attn_mask)
