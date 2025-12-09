@@ -60,7 +60,7 @@ EVALUATION_CHECKPOINT_NAME = 'Adam_HighLR'
 # ADJUST THIS LIST to match the 'name' key of your saved experiments:
 CHECKPOINTS_TO_EVALUATE = ['Adam_HighLR', 'SGD_withMomentum', 'AdamW_LowLR']
 # -------------- Hyper / Paths --------------
-TRAIN = False   # Set True to train, False to load and run inference
+TRAIN = True   # Set True to train, False to load and run inference
 MANIFEST_PATH = 'data/processed/imgflip575k_manifest.json'
 CHECKPOINT_PATH = 'models/meme_caption_vit.pt'
 EXAMPLE_OUTPUT_DIR = 'eval/image_examples'
@@ -606,6 +606,7 @@ if __name__ == "__main__":
         transforms.RandomResizedCrop(224),
         transforms.RandomHorizontalFlip(),
         transforms.ColorJitter(0.2,0.2,0.2,0.05),
+        transforms.RandomRotation(15),
         transforms.ToTensor(),
         transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225])
     ])

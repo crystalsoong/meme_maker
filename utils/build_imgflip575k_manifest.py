@@ -51,18 +51,10 @@ def process_json_file(json_path: Path):
     entries = []
     
     for idx, item in enumerate(raw[:200]):
-<<<<<<< HEAD
-        # Find URL (Required for Visual Input)
-=======
->>>>>>> a47e9358e79f8584e90737d047dbdbb8b27691be
         url = item.get("url") or item.get("image_url") or item.get("post") or item.get("img")
         if not url:
             continue
 
-<<<<<<< HEAD
-        # STRICT CAPTION FILTERING (ONLY accept ON-IMAGE text from 'boxes' or 'texts')
-=======
->>>>>>> a47e9358e79f8584e90737d047dbdbb8b27691be
         boxes = item.get("boxes") or item.get("texts") or []
         
         if not isinstance(boxes, list) or not boxes:
@@ -70,24 +62,12 @@ def process_json_file(json_path: Path):
             
         caption = " ".join([str(b).strip() for b in boxes if isinstance(b, str)]).strip()
 
-<<<<<<< HEAD
-        #  MINIMUM LENGTH FILTER
-        if not caption or len(caption) < MIN_CAPTION_LENGTH:
-            continue
-
-
-        filename = f"{json_path.stem}_{idx}.jpg"
-        out_path = OUT_IMG_DIR / filename
-
-
-=======
         if not caption or len(caption) < MIN_CAPTION_LENGTH:
             continue
 
         filename = f"{json_path.stem}_{idx}.jpg"
         out_path = OUT_IMG_DIR / filename
 
->>>>>>> a47e9358e79f8584e90737d047dbdbb8b27691be
         if out_path.exists():
             entries.append({"image": str(out_path), "caption": caption, "tone": "<humor>"})
             continue
