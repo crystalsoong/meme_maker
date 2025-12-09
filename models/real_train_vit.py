@@ -30,6 +30,35 @@ except ImportError:
     Bleu, Cider = DummyBleu, DummyCider
 
 
+# -------------- Different Configurations ---------
+EXPERIMENT_CONFIGS = [
+    {
+        'name': 'AdamW_LowLR',
+        'optimizer_class': torch.optim.AdamW,
+        'kwargs': {'lr': 1e-4, 'weight_decay': 1e-4},
+        'scheduler_class': torch.optim.lr_scheduler.ReduceLROnPlateau,
+        'scheduler_kwargs': {'mode': 'min', 'factor': 0.5, 'patience': 2}
+    },
+    {
+        'name': 'Adam_HighLR',
+        'optimizer_class': torch.optim.Adam,
+        'kwargs': {'lr': 1e-3, 'weight_decay': 1e-4},
+        'scheduler_class': None, # No scheduler for this one
+        'scheduler_kwargs': {}
+    },
+    {
+        'name': 'SGD_withMomentum',
+        'optimizer_class': torch.optim.SGD,
+        'kwargs': {'lr': 0.01, 'momentum': 0.9, 'weight_decay': 1e-4},
+        'scheduler_class': None,
+        'scheduler_kwargs': {}
+    }
+]
+
+EVALUATION_CHECKPOINT_NAME = 'Adam_HighLR'
+# --- Configuration Checkpoint List (Define this earlier in your script) ---
+# ADJUST THIS LIST to match the 'name' key of your saved experiments:
+CHECKPOINTS_TO_EVALUATE = ['Adam_HighLR', 'SGD_withMomentum', 'AdamW_LowLR']
 # -------------- Hyper / Paths --------------
 TRAIN = False   # <-- Set True to train, False to load and run inference
 MANIFEST_PATH = 'data/processed/imgflip575k_manifest.json'
@@ -103,28 +132,6 @@ class TransformerBlock(nn.Module):
             return h.transpose(0, 1)
         else:
             raise ValueError(f"Unsupported input dim {x.dim()} in TransformerBlock")
-
-# -------------- Vision encoder --------------
-# class VisionEncoder(nn.Module):
-#     def __init__(self, d_embed, num_heads, n_blocks, img_size=224, patch_size=16, in_channels=3):
-#         super().__init__()
-#         self.patch_size = patch_size
-#         self.num_patches = (img_size // patch_size) ** 2
-#         self.patch_embedding = nn.Conv2d(in_channels, d_embed, kernel_size=patch_size, stride=patch_size)
-#         self.positional_embedding = nn.Embedding(self.num_patches, d_embed)
-#         self.blocks = nn.ModuleList([TransformerBlock(d_embed, num_heads) for _ in range(n_blocks)])
-#         self.norm = nn.LayerNorm(d_embed)
-
-#     def forward(self, x):
-#         # x: (B, C, H, W)
-#         x = self.patch_embedding(x)                          # (B, d, H', W')
-#         x = x.flatten(2).transpose(1, 2)                    # (B, num_patches, d)
-#         pos = torch.arange(self.num_patches, device=x.device)
-#         x = x + self.positional_embedding(pos).unsqueeze(0)
-#         for b in self.blocks:
-#             x = b(x, None)
-#         x = self.norm(x)
-#         return x.mean(dim=1)  # (B, d)
 
 class VisionEncoder(nn.Module):
     def __init__(self, d_embed, pretrained_model_name='vit_b_16'):
@@ -202,19 +209,6 @@ class TransformerDecoder(nn.Module):
             h = b(h, attn_mask)
         logits = self.unembed(h[:, 1:, :])                   # (B, S, V)
         return logits
-
-# -------------- Full model --------------
-# class ImageCaptioningModel(nn.Module):
-#     def __init__(self, vocab_size, d_embed=128, num_heads=4, n_blocks=4, max_length=512,
-#                  img_size=224, patch_size=16, in_channels=3):
-#         super().__init__()
-#         self.vision_encoder = VisionEncoder(d_embed, num_heads, n_blocks, img_size, patch_size, in_channels)
-#         self.transformer_decoder = TransformerDecoder(vocab_size, d_embed, num_heads, max_length, n_blocks)
-
-#     def forward(self, images, caption_input):
-#         img_feat = self.vision_encoder(images)
-#         logits = self.transformer_decoder(caption_input, img_feat)
-#         return logits
 
 
 # -------------- Full model (Modified) --------------
@@ -760,88 +754,156 @@ if __name__ == "__main__":
     criterion = nn.CrossEntropyLoss(ignore_index=padding_idx, label_smoothing=0.1)
 
 
-    config = {
-    'name': 'default_experiment_with_scheduler',
-    'optimizer_class': torch.optim.AdamW,
-    'kwargs': {'lr':3e-4, 'weight_decay':1e-4},
-    'scheduler_class': torch.optim.lr_scheduler.ReduceLROnPlateau, # Use this scheduler
-    'scheduler_kwargs': {'mode': 'min', 'factor': 0.5, 'patience': 2} # Reduce LR if Val Loss plateaus
-}
-
     # ---------- 6) TRAIN or LOAD ----------
-    if TRAIN:
-        set_seed(SEED)
-        history, trained_model = run_optimizer_experiment(
-            model=model,
+if TRAIN:
+    set_seed(SEED)
+    all_histories = {} 
+    
+    # Run all defined experiments
+    for exp_config in EXPERIMENT_CONFIGS:
+        print(f"\n=============================================")
+        print(f"Starting Experiment: {exp_config['name']}")
+        print(f"=============================================")
+
+        # 1. CRITICAL: Re-initialize the model for a fresh start
+        exp_model = ImageCaptioningModel(
+            vocab_size=len(tokenizer.vocab),
+            d_embed=d_embed,
+            max_length=max_length_for_model
+        ).to(device)
+
+        # 2. Define a unique checkpoint path for this run
+        exp_checkpoint_path = os.path.join('models', f"meme_caption_{exp_config['name']}.pt")
+
+        # 3. Run the experiment
+        history, final_trained_model_instance = run_optimizer_experiment(
+            model=exp_model,
             tokenizer=tokenizer,
             train_dataloader=train_loader,
             val_dataloader=val_loader,
             criterion=criterion,
-            num_epochs=15,
+            num_epochs=5,
             device=device,
-            config=config,
+            config=exp_config,
             display=True,
-            checkpoint_path=CHECKPOINT_PATH
+            checkpoint_path=exp_checkpoint_path
         )
-        # trained_model is the trained instance
-    else:
-        # Load checkpoint (assumes checkpoint has 'model_state_dict')
-        ckpt = torch.load(CHECKPOINT_PATH, map_location=device)
+        
+        # 4. Store the history for final comparison/plotting
+        all_histories[exp_config['name']] = history
+        
+    # After all training, set the model to the last one trained for diagnostics
+    # NOTE: You might want to manually load the BEST one instead.
+    trained_model = final_trained_model_instance 
+
+else:
+    # Load the specific checkpoint defined for evaluation
+    load_path = os.path.join('models', f"meme_caption_{EVALUATION_CHECKPOINT_NAME}.pt")
+    
+    # Load checkpoint
+    ckpt = torch.load(load_path, map_location=device)
+    state_dict = ckpt.get('model_state_dict', ckpt)
+    
+    # Handle DataParallel prefix if present
+    if any(k.startswith('module.') for k in state_dict.keys()):
+        state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
+    
+    # Load state into the initialized model (defined globally)
+    model.load_state_dict(state_dict)
+    trained_model = model # Use the original 'model' object now that it's loaded
+    print(f"Loaded checkpoint from {load_path}")
+
+
+# --- 7) Diagnostics and generation for ALL models ---
+
+# Initialize the model structure once to load all weights into
+eval_model = ImageCaptioningModel(
+    vocab_size=len(tokenizer.vocab),
+    d_embed=d_embed,
+    max_length=max_length_for_model
+).to(device)
+
+
+# Loop through each saved checkpoint name
+for checkpoint_name in CHECKPOINTS_TO_EVALUATE:
+    print(f"\n\n=======================================================")
+    print(f"       ✨ Evaluating Model: {checkpoint_name} ✨")
+    print(f"=======================================================")
+
+    # A. Load the Checkpoint
+    load_path = os.path.join('models', f"meme_caption_{checkpoint_name}.pt")
+    
+    try:
+        # Load the checkpoint file
+        ckpt = torch.load(load_path, map_location=device)
         state_dict = ckpt.get('model_state_dict', ckpt)
+        
+        # Handle DataParallel prefix if present
         if any(k.startswith('module.') for k in state_dict.keys()):
             state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
-        model.load_state_dict(state_dict)
-        trained_model = model
-        print("Loaded checkpoint from", CHECKPOINT_PATH)
+        
+        # Load weights into the evaluation model
+        eval_model.load_state_dict(state_dict)
+        trained_model = eval_model # Reference the loaded model for current evaluation round
+        print(f"Loaded checkpoint from {load_path}")
+        
+    except FileNotFoundError:
+        print(f"!!! ERROR: Checkpoint not found at {load_path}. Skipping evaluation for this model. !!!")
+        continue # Skip to the next optimizer
 
-    # ---------- 7) Diagnostics and generation ----------
+
+    # B. Run Diagnostics (First-token stats)
     print("First-token stats (top 10):", first_token_stats(trained_model, train_loader, tokenizer, device, max_batches=100)[:10])
 
-# Show a few examples (first N from test set)
-    N = 10
+    
+    # C. Show Examples (N examples from test set)
+    N = 5 # Changed from 10 to 5 for quicker output
     cnt = 0
+    print(f"\n--- Generating {N} Examples ---")
+    
+    # Nested loops required to iterate through batches and items within the batch
     for images_b, inps_b, tgts_b in test_loader:
-        for i in range(images_b.size(0)):
-            img = images_b[i]  # (C,H,W)
+        for i in range(images_b.size(0)): 
+            if cnt >= N: break 
+
+            img = images_b[i] # Current image tensor
             
-            # 1. Decode Reference Caption (This is okay to do first)
+            # 1. Decode Reference Caption 
             tgt_seq = tgts_b[i].tolist()
             eos = tokenizer.word_to_index.get('<eos>', None)
             ref = []
             for tok in tgt_seq:
-                if tok == padding_idx: break
+                if padding_idx is not None and tok == padding_idx: break
                 if eos is not None and tok == eos: break
                 ref.append(tok)
             ref_text = tokenizer.decode(ref)
             
-            # 2. ***CRITICAL FIX: GENERATE PREDICTIONS HERE***
-            # These lines define pred_greedy and pred_beam
-            pred_greedy = generate_greedy(trained_model, img, tokenizer, device, max_len=50, min_len=2, temperature = 0.9, top_p = 0.9)
-            pred_beam   = generate_beam(trained_model, img, tokenizer, device, max_len=50, beam_width=3)
+            # 2. Generate Predictions 
+            pred_greedy = generate_greedy(trained_model, images_b[i].unsqueeze(0), tokenizer, device, max_len=50, min_len=2, temperature = 0.9, top_p = 0.9)
+            pred_beam   = generate_beam(trained_model, images_b[i].unsqueeze(0), tokenizer, device, max_len=50, beam_width=3)
             
-            # 3. Create a descriptive filename using the defined prediction variable
-            base_filename = f"example_{cnt+1}_greedy.jpg"
-            
-            # 4. Save the image and print output
-            save_example_image(images_b[i], base_filename)
+            # 3. Create a descriptive filename and save the image (OPTIONAL: add optimizer name to filename)
+            base_filename = f"example_{checkpoint_name}_{cnt+1}.jpg"
+            save_example_image(img, base_filename) # Using your helper function
 
-            print(f"=== Example {cnt+1} (Saved as: {base_filename}) ===")
+            # 4. Print Output
+            print(f"=== Example {cnt+1} ({checkpoint_name}) ===")
             print("Reference:", ref_text)
             print("Greedy:", pred_greedy)
             print("Beam:", pred_beam)
             print()
             
             cnt += 1
-            if cnt >= N: break
-        if cnt >= N: break
+            
+        if cnt >= N: break 
 
-# Final evaluation (token-level) - Still useful for comparison
-    eval_loss, eval_acc = evaluate_model(trained_model, test_loader, criterion, device, padding_idx, split_name="Final Test")
-    print(f"Final token-level accuracy: {eval_acc:.4f}")
+
+    # D. Final Evaluation Metrics (Sequence Metrics are crucial for comparison)
+    eval_loss, eval_acc = evaluate_model(trained_model, test_loader, criterion, device, padding_idx, split_name=f"Test ({checkpoint_name})")
     
-    # --- Run Sequence Metrics for Submission ---
     cider_score, bleu4_score = run_sequence_metrics(trained_model, test_loader, tokenizer, device, padding_idx)
     
-    print("\n=======================================================")
-    print(f"Final Submission Metrics: CIDEr-D={cider_score:.4f}, BLEU-4={bleu4_score:.4f}")
-    print("=======================================================")
+    print(f"\nFinal Metrics for {checkpoint_name}:")
+    print(f"  Token Accuracy={eval_acc:.4f}")
+    print(f"  CIDEr-D={cider_score:.4f}, BLEU-4={bleu4_score:.4f}")
+    print("-------------------------------------------------------")

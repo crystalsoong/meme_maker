@@ -91,7 +91,7 @@ def process_json_file(json_path: Path):
         out_path = OUT_IMG_DIR / filename
 
         # Skip download if image already exists
-        if os.path.exists(out_path):
+        if out_path.exists():
             entries.append({"image": str(out_path), "caption": caption, "tone": "<humor>"})
             continue
 
